@@ -38,6 +38,8 @@ Optional: [just](https://github.com/casey/just) for convenient dev commands.
 1. Build and install the `lazyspeak` daemon binary via `cargo install`
 2. Download the Voxtral Mini 3B GGUF model (~2.5 GB) to `~/.local/share/lazyspeak/`
 
+When you run `:LazySpeakStart`, the plugin automatically starts `llama-server` with the model if it isn't already running. It shuts down with `:LazySpeakStop`.
+
 ### Manual installation
 
 ```sh
