@@ -56,6 +56,109 @@ function M.run()
 	end
 end
 
+--- llama-server process management
+
+---@type number?
+M._llama_job_id = nil
+
+--- Check if a llama-server is already responding on the given port.
+---@param port number
+---@return boolean
+function M.is_server_running(port)
+	local handle = io.popen(string.format("curl -sf http://127.0.0.1:%d/health 2>/dev/null", port))
+	if not handle then
+		return false
+	end
+	local result = handle:read("*a")
+	handle:close()
+	return result ~= nil and result ~= ""
+end
+
+--- Start llama-server with the Voxtral model if not already running.
+---@param opts? { port?: number, model_path?: string }
+---@param on_ready? fun() called once the server is healthy
+function M.start_llama_server(opts, on_ready)
+	opts = opts or {}
+	local port = opts.port or 8674
+	local model_path = vim.fn.expand(opts.model_path or MODEL_PATH)
+
+	-- Already managed by us
+	if M._llama_job_id then
+		if on_ready then on_ready() end
+		return
+	end
+
+	-- Something else is already listening on the port
+	if M.is_server_running(port) then
+		vim.notify("[lazyspeak] llama-server already running on port " .. port)
+		if on_ready then on_ready() end
+		return
+	end
+
+	-- Model must exist
+	if vim.fn.filereadable(model_path) ~= 1 then
+		vim.notify("[lazyspeak] model not found at " .. model_path .. " — run :LazySpeakInstall first", vim.log.levels.ERROR)
+		return
+	end
+
+	-- llama-server must be installed
+	if vim.fn.executable("llama-server") ~= 1 then
+		vim.notify("[lazyspeak] llama-server not found — install llama.cpp (brew install llama.cpp)", vim.log.levels.ERROR)
+		return
+	end
+
+	vim.notify("[lazyspeak] starting llama-server on port " .. port .. "...")
+
+	M._llama_job_id = vim.fn.jobstart({
+		"llama-server",
+		"-m", model_path,
+		"--port", tostring(port),
+	}, {
+		on_exit = function(_, code, _)
+			M._llama_job_id = nil
+			if code ~= 0 then
+				vim.schedule(function()
+					vim.notify("[lazyspeak] llama-server exited with code " .. code, vim.log.levels.WARN)
+				end)
+			end
+		end,
+	})
+
+	if M._llama_job_id <= 0 then
+		vim.notify("[lazyspeak] failed to start llama-server", vim.log.levels.ERROR)
+		M._llama_job_id = nil
+		return
+	end
+
+	-- Poll until server is healthy (up to 30s)
+	if on_ready then
+		local attempts = 0
+		local max_attempts = 60
+		local timer = vim.uv.new_timer()
+		timer:start(500, 500, vim.schedule_wrap(function()
+			attempts = attempts + 1
+			if M.is_server_running(port) then
+				timer:stop()
+				timer:close()
+				vim.notify("[lazyspeak] llama-server ready")
+				on_ready()
+			elseif attempts >= max_attempts then
+				timer:stop()
+				timer:close()
+				vim.notify("[lazyspeak] llama-server did not become ready in time", vim.log.levels.ERROR)
+			end
+		end))
+	end
+end
+
+--- Stop the managed llama-server process.
+function M.stop_llama_server()
+	if M._llama_job_id then
+		vim.fn.jobstop(M._llama_job_id)
+		M._llama_job_id = nil
+	end
+end
+
 M.MODEL_PATH = MODEL_PATH
 M.DATA_DIR = DATA_DIR
 
