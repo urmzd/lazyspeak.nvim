@@ -105,7 +105,25 @@ function M.setup(opts)
 	end, { desc = "lazyspeak: undo last edit" })
 end
 
+--- Start voice + core + UI, auto-launching llama-server if needed.
 function M.start()
+	if M._voice and M._voice:is_running() then
+		return
+	end
+
+	local install = require("lazyspeak.install")
+
+	-- Auto-start llama-server, then bring up the rest once it's ready
+	install.start_llama_server({
+		port = M.config.model.server_port,
+		model_path = M.config.model.path,
+	}, function()
+		M._start_pipeline()
+	end)
+end
+
+--- Internal: start the voice daemon, core, and UI (called after llama-server is ready).
+function M._start_pipeline()
 	if M._voice and M._voice:is_running() then
 		return
 	end
@@ -181,6 +199,7 @@ function M.stop()
 		M._core:stop()
 		M._core = nil
 	end
+	require("lazyspeak.install").stop_llama_server()
 	M._state = "inactive"
 	M._listening = false
 end
