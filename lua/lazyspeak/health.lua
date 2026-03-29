@@ -13,6 +13,16 @@ function M.check()
 		})
 	end
 
+	-- llama-server (STT inference)
+	if vim.fn.executable("llama-server") == 1 then
+		vim.health.ok("llama-server found")
+	else
+		vim.health.warn("llama-server not found (needed for local STT)", {
+			"Install: brew install llama.cpp",
+			"Or build from source: https://github.com/ggml-org/llama.cpp",
+		})
+	end
+
 	-- Claude CLI (for claudecode adapter)
 	if vim.fn.executable("claude") == 1 then
 		vim.health.ok("claude CLI found")
