@@ -13,16 +13,6 @@ function M.check()
 		})
 	end
 
-	-- llama-server (STT inference)
-	if vim.fn.executable("llama-server") == 1 then
-		vim.health.ok("llama-server found")
-	else
-		vim.health.warn("llama-server not found (needed for local STT)", {
-			"Install: brew install llama.cpp",
-			"Or build from source: https://github.com/ggml-org/llama.cpp",
-		})
-	end
-
 	-- Claude CLI (for claudecode adapter)
 	if vim.fn.executable("claude") == 1 then
 		vim.health.ok("claude CLI found")
@@ -30,30 +20,28 @@ function M.check()
 		vim.health.info("claude CLI not found (needed for claudecode adapter)")
 	end
 
-	-- Model file
+	-- ONNX model
 	local install = require("lazyspeak.install")
-	if vim.fn.filereadable(install.MODEL_PATH) == 1 then
-		local size = vim.fn.getfsize(install.MODEL_PATH)
-		local size_gb = string.format("%.1f GB", size / (1024 * 1024 * 1024))
-		vim.health.ok("Voxtral model found (" .. size_gb .. ")")
+	if vim.fn.isdirectory(install.ONNX_DIR) == 1 then
+		vim.health.ok("ONNX model found at " .. install.ONNX_DIR)
 	else
-		vim.health.info("Voxtral model not downloaded", {
+		vim.health.info("ONNX model not found", {
 			"Run: :LazySpeakInstall",
-			"Or: just download-model",
+			"Or: just convert-model",
 		})
 	end
 
-	-- curl (for model download)
-	if vim.fn.executable("curl") == 1 then
-		vim.health.ok("curl found")
+	-- Python (for model conversion)
+	if vim.fn.executable("python3") == 1 then
+		vim.health.ok("python3 found")
 	else
-		vim.health.warn("curl not found (needed for model download)")
+		vim.health.warn("python3 not found (needed for ONNX model conversion)")
 	end
 
 	-- Plugin state
 	local ok, ls = pcall(require, "lazyspeak")
 	if ok and ls.config and ls.config.agent then
-		vim.health.ok("plugin loaded (adapter: " .. ls.config.agent.adapter .. ")")
+		vim.health.ok("plugin loaded (adapter: " .. ls.config.agent.adapter .. ", backend: " .. ls.config.model.backend .. ")")
 	elseif ok then
 		vim.health.warn("plugin loaded but not configured — call require('lazyspeak').setup()")
 	else
