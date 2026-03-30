@@ -8,10 +8,10 @@
 use super::{SpeechTranscriber, TranscribeResult};
 use anyhow::Result;
 use ndarray::Array2;
-use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
+use ort::session::builder::GraphOptimizationLevel;
 use ort::value::Tensor;
-use rustfft::{num_complex::Complex, FftPlanner};
+use rustfft::{FftPlanner, num_complex::Complex};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Instant;
@@ -131,7 +131,7 @@ impl OnnxTranscriber {
 
         // Flatten to [1, N_MELS, n_frames] in row-major order
         let shape = vec![1, N_MELS, n_frames];
-        let data: Vec<f32> = normalised.iter().cloned().collect();
+        let data: Vec<f32> = normalised.into_raw_vec();
         (shape, data)
     }
 
@@ -150,9 +150,8 @@ impl OnnxTranscriber {
             let last_id = *generated_ids.last().unwrap();
 
             // Embed the last token
-            let input_ids =
-                Tensor::from_array(([1usize, 1], vec![last_id]))
-                    .map_err(|e| anyhow::anyhow!("input_ids tensor: {e}"))?;
+            let input_ids = Tensor::from_array(([1usize, 1], vec![last_id]))
+                .map_err(|e| anyhow::anyhow!("input_ids tensor: {e}"))?;
 
             let embeddings = embed
                 .run(ort::inputs![input_ids])
@@ -163,15 +162,12 @@ impl OnnxTranscriber {
                 .map_err(|e| anyhow::anyhow!("extract embeds: {e}"))?;
 
             // Rebuild tensors for decoder (ort takes ownership)
-            let enc_shape_vec: Vec<i64> = enc_shape.iter().copied().collect();
-            let enc_tensor =
-                Tensor::from_array((enc_shape_vec, enc_data.to_vec()))
-                    .map_err(|e| anyhow::anyhow!("enc tensor: {e}"))?;
-            let emb_shape_vec: Vec<i64> = _emb_shape.iter().copied().collect();
-            let embeds_tensor = Tensor::from_array(
-                (emb_shape_vec, emb_data.to_vec()),
-            )
-            .map_err(|e| anyhow::anyhow!("embeds tensor: {e}"))?;
+            let enc_shape_vec: Vec<i64> = enc_shape.to_vec();
+            let enc_tensor = Tensor::from_array((enc_shape_vec, enc_data.to_vec()))
+                .map_err(|e| anyhow::anyhow!("enc tensor: {e}"))?;
+            let emb_shape_vec: Vec<i64> = _emb_shape.to_vec();
+            let embeds_tensor = Tensor::from_array((emb_shape_vec, emb_data.to_vec()))
+                .map_err(|e| anyhow::anyhow!("embeds tensor: {e}"))?;
 
             // Run decoder
             let decoder_out = decoder
@@ -224,9 +220,8 @@ impl SpeechTranscriber for OnnxTranscriber {
         let (mel_shape, mel_data) = self.mel_spectrogram(samples);
 
         // 2. Run audio encoder
-        let mel_tensor =
-            Tensor::from_array((mel_shape.as_slice(), mel_data))
-                .map_err(|e| anyhow::anyhow!("mel tensor: {e}"))?;
+        let mel_tensor = Tensor::from_array((mel_shape.as_slice(), mel_data))
+            .map_err(|e| anyhow::anyhow!("mel tensor: {e}"))?;
 
         let mut enc = self.encoder.lock().unwrap();
         let encoder_out = enc
@@ -237,7 +232,7 @@ impl SpeechTranscriber for OnnxTranscriber {
             .try_extract_tensor::<f32>()
             .map_err(|e| anyhow::anyhow!("extract encoder output: {e}"))?;
 
-        let enc_shape_vec: Vec<i64> = enc_shape.iter().copied().collect();
+        let enc_shape_vec: Vec<i64> = enc_shape.to_vec();
         let enc_data_vec: Vec<f32> = enc_data.to_vec();
         drop(encoder_out);
         drop(enc);

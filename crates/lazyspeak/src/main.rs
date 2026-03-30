@@ -1,11 +1,30 @@
 use anyhow::Result;
 use lazyspeak_core::audio::{AudioCapture, AudioConfig, AudioEvent};
-use lazyspeak_core::protocol::{parse_command, serialize_event, Command, Event, State};
-use lazyspeak_core::transcribe::SpeechTranscriber;
+use lazyspeak_core::protocol::{Command, Event, State, parse_command, serialize_event};
+use lazyspeak_core::transcribe::{SpeechTranscriber, TranscribeResult};
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
+
+/// Stub transcriber used when the real backend fails to initialise.
+struct StubTranscriber {
+    reason: String,
+}
+
+impl SpeechTranscriber for StubTranscriber {
+    fn transcribe(&self, _samples: &[f32], _sample_rate: u32) -> Result<TranscribeResult> {
+        anyhow::bail!("STT unavailable: {}", self.reason)
+    }
+
+    fn is_ready(&self) -> bool {
+        false
+    }
+
+    fn name(&self) -> &str {
+        "stub"
+    }
+}
 
 fn emit(event: &Event) -> Result<()> {
     let line = serialize_event(event)?;
@@ -17,18 +36,18 @@ fn emit(event: &Event) -> Result<()> {
 
 /// Build the appropriate transcription backend from environment variables.
 ///
-/// LAZYSPEAK_BACKEND     — "http" (default) or "onnx"
+/// LAZYSPEAK_BACKEND     — "onnx" (default) or "http"
 /// LAZYSPEAK_STT_URL     — server URL for the http backend
 /// LAZYSPEAK_MODEL_DIR   — ONNX model directory for the onnx backend
 /// LAZYSPEAK_MODEL_VARIANT — ONNX quantisation suffix (default "_q4")
 fn build_transcriber() -> Result<Box<dyn SpeechTranscriber>> {
-    let backend = std::env::var("LAZYSPEAK_BACKEND").unwrap_or_else(|_| "http".to_string());
+    let backend = std::env::var("LAZYSPEAK_BACKEND").unwrap_or_else(|_| "onnx".to_string());
 
     match backend.as_str() {
         #[cfg(feature = "http")]
         "http" => {
             use lazyspeak_core::transcribe::http::{
-                HttpTranscriber, HttpTranscriberConfig, DEFAULT_SERVER_URL,
+                DEFAULT_SERVER_URL, HttpTranscriber, HttpTranscriberConfig,
             };
             let server_url = std::env::var("LAZYSPEAK_STT_URL")
                 .unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string());
@@ -38,7 +57,7 @@ fn build_transcriber() -> Result<Box<dyn SpeechTranscriber>> {
         #[cfg(feature = "onnx")]
         "onnx" => {
             use lazyspeak_core::transcribe::onnx::{
-                OnnxTranscriber, OnnxTranscriberConfig, DEFAULT_MODEL_DIR, DEFAULT_VARIANT,
+                DEFAULT_MODEL_DIR, DEFAULT_VARIANT, OnnxTranscriber, OnnxTranscriberConfig,
             };
             let model_dir = std::env::var("LAZYSPEAK_MODEL_DIR")
                 .unwrap_or_else(|_| shellexpand::tilde(DEFAULT_MODEL_DIR).to_string());
@@ -66,14 +85,24 @@ fn main() -> Result<()> {
 
     emit(&Event::Status { state: State::Idle })?;
 
-    let transcriber = build_transcriber()?;
+    let transcriber = match build_transcriber() {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!("failed to initialise STT backend: {e}");
+            Box::new(StubTranscriber {
+                reason: e.to_string(),
+            }) as Box<dyn SpeechTranscriber>
+        }
+    };
 
     let backend_name = transcriber.name();
     let stt_available = transcriber.is_ready();
     if stt_available {
         tracing::info!("STT backend ready ({backend_name})");
     } else {
-        tracing::warn!("STT backend not ready ({backend_name}) — will emit placeholder transcripts");
+        tracing::warn!(
+            "STT backend not ready ({backend_name}) — will emit placeholder transcripts"
+        );
     }
 
     let audio = AudioCapture::new(AudioConfig::default());
@@ -109,10 +138,7 @@ fn main() -> Result<()> {
                         format!("[audio {duration_ms}ms — STT backend not available]")
                     };
 
-                    let _ = emit(&Event::Transcript {
-                        text,
-                        duration_ms,
-                    });
+                    let _ = emit(&Event::Transcript { text, duration_ms });
                     emit(&Event::Status { state: State::Idle })
                 }
                 AudioEvent::Error(msg) => emit(&Event::Error { message: msg }),
