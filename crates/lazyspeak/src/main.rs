@@ -21,8 +21,8 @@ fn build_transcriber() -> Result<Box<dyn SpeechTranscriber>> {
     use lazyspeak_core::transcribe::http::{
         DEFAULT_SERVER_URL, HttpTranscriber, HttpTranscriberConfig,
     };
-    let server_url = std::env::var("LAZYSPEAK_STT_URL")
-        .unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string());
+    let server_url =
+        std::env::var("LAZYSPEAK_STT_URL").unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string());
     let transcriber = HttpTranscriber::new(HttpTranscriberConfig { server_url });
     Ok(Box::new(transcriber))
 }
