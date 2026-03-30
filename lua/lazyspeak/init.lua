@@ -8,7 +8,7 @@ local M = {}
 
 ---@class lazyspeak.Config
 ---@field agent { adapter: string, cmd?: string[], auto_approve?: boolean }
----@field model { backend: string, onnx_dir?: string, onnx_variant?: string, server_url?: string }
+---@field model { path: string, server_port: number, server_url?: string }
 ---@field audio { sample_rate: number, channels: number, vad_threshold: number, silence_duration_ms: number, max_duration_ms: number }
 ---@field ui { float_position: string, float_width: number, show_waveform: boolean, statusline: boolean }
 ---@field snapshot { enabled: boolean, max_stack: number, use_git: boolean }
@@ -21,11 +21,9 @@ M.defaults = {
 		adapter = "claudecode",
 	},
 	model = {
-		backend = "onnx", -- "onnx" | "http"
-		onnx_dir = install.ONNX_DIR,
-		onnx_variant = "_q4",
-		-- HTTP backend (bring your own server)
-		server_url = nil, -- e.g. "http://127.0.0.1:8674"
+		path = install.MODEL_PATH,
+		server_port = install.DEFAULT_PORT,
+		-- server_url = "http://127.0.0.1:8674",  -- override to use external server
 	},
 	audio = {
 		sample_rate = 16000,
@@ -110,31 +108,30 @@ function M.setup(opts)
 end
 
 --- Build the environment variable table for the daemon process.
---- Single place that translates plugin config -> daemon env vars.
 ---@param model table the model config table
 ---@return table<string, string>
 local function build_daemon_env(model)
-	local env = { LAZYSPEAK_BACKEND = model.backend }
-
-	if model.backend == "onnx" then
-		env.LAZYSPEAK_MODEL_DIR = vim.fn.expand(model.onnx_dir or "")
-		env.LAZYSPEAK_MODEL_VARIANT = model.onnx_variant or ""
-	elseif model.backend == "http" then
-		if model.server_url then
-			env.LAZYSPEAK_STT_URL = model.server_url
-		end
-	end
-
-	return env
+	local url = model.server_url or ("http://127.0.0.1:" .. model.server_port)
+	return { LAZYSPEAK_STT_URL = url }
 end
 
---- Start voice + core + UI.
+--- Start voice + core + UI, auto-launching llama-server if needed.
 function M.start()
 	if M._voice and M._voice:is_running() then
 		return
 	end
 
-	M._start_pipeline()
+	-- If using the built-in server (no custom server_url), auto-start llama-server
+	if not M.config.model.server_url then
+		install.start_llama_server({
+			port = M.config.model.server_port,
+			model_path = M.config.model.path,
+		}, function()
+			M._start_pipeline()
+		end)
+	else
+		M._start_pipeline()
+	end
 end
 
 --- Internal: start the voice daemon, core, and UI (called after server is ready).
@@ -215,6 +212,7 @@ function M.stop()
 		M._core:stop()
 		M._core = nil
 	end
+	install.stop_llama_server()
 	M._state = "inactive"
 	M._listening = false
 end
