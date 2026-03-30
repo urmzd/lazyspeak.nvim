@@ -61,8 +61,8 @@ daemon-dev:
 nvim-dev:
     nvim --cmd 'set rtp+=.' -c 'lua require("lazyspeak").setup()'
 
-# Convert official Voxtral model to ONNX (requires Python + deps)
+# Convert Voxtral HF model to GGUF Q4_K_M (requires Python + llama.cpp)
 convert-model:
-    pip install transformers torch optimum[exporters] onnxruntime onnxslim
-    python scripts/convert_model.py --quantize q4
+    pip install gguf transformers torch mistral-common
+    python scripts/convert_model.py
 
