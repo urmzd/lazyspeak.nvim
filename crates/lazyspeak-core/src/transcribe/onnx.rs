@@ -3,7 +3,7 @@
 //! Runs Voxtral inference entirely in-process — no external server needed.
 //! Requires pre-exported ONNX model files (see `scripts/convert_model.py`).
 //!
-//! Pipeline: audio → mel spectrogram → encoder → decoder (autoregressive) → text
+//! Pipeline: audio → mel spectrogram → audio encoder (+projector) → [audio_embeds ++ token_embeds] → decoder → text
 
 use super::{SpeechTranscriber, TranscribeResult};
 use anyhow::Result;
@@ -32,11 +32,11 @@ pub const DEFAULT_VARIANT: &str = "_q4";
 /// Expected directory layout (produced by `scripts/convert_model.py`):
 /// ```text
 /// <base>/
-///   tokenizer.json
+///   tokenizer.json (or tokenizer_config.json + tokenizer.model)
 ///   onnx/
-///     audio_encoder<variant>.onnx
-///     decoder_model_merged<variant>.onnx
-///     embed_tokens<variant>.onnx
+///     audio_encoder<variant>.onnx   (audio tower + projector)
+///     decoder<variant>.onnx         (LM forward, no KV cache)
+///     embed_tokens<variant>.onnx    (token embedding lookup)
 /// ```
 pub struct OnnxTranscriberConfig {
     /// Directory containing the ONNX model files (the `onnx/` subdirectory).
@@ -65,7 +65,7 @@ impl OnnxTranscriber {
         let dir = &config.model_dir;
 
         let encoder = load_session(&dir.join(format!("audio_encoder{suffix}.onnx")))?;
-        let decoder = load_session(&dir.join(format!("decoder_model_merged{suffix}.onnx")))?;
+        let decoder = load_session(&dir.join(format!("decoder{suffix}.onnx")))?;
         let embed_tokens = load_session(&dir.join(format!("embed_tokens{suffix}.onnx")))?;
 
         let tokenizer_path = config
@@ -135,56 +135,66 @@ impl OnnxTranscriber {
         (shape, data)
     }
 
-    /// Greedy autoregressive decode from encoder hidden states.
-    fn decode(&self, enc_shape: &[i64], enc_data: &[f32]) -> Result<String> {
+    /// Embed a single token via the embed_tokens ONNX model.
+    fn embed_token(&self, token_id: i64) -> Result<Vec<f32>> {
+        let mut embed = self.embed_tokens.lock().unwrap();
+        let input_ids = Tensor::from_array(([1usize, 1], vec![token_id]))
+            .map_err(|e| anyhow::anyhow!("input_ids tensor: {e}"))?;
+        let out = embed
+            .run(ort::inputs![input_ids])
+            .map_err(|e| anyhow::anyhow!("embed_tokens run: {e}"))?;
+        let (_shape, data) = out[0]
+            .try_extract_tensor::<f32>()
+            .map_err(|e| anyhow::anyhow!("extract embeds: {e}"))?;
+        Ok(data.to_vec())
+    }
+
+    /// Run decoder on a flat embedding sequence, return logits for last position.
+    fn decode_step(
+        &self,
+        embeds: &[f32],
+        seq_len: usize,
+        hidden_size: usize,
+    ) -> Result<Vec<f32>> {
+        let mut decoder = self.decoder.lock().unwrap();
+        let shape: Vec<i64> = vec![1, seq_len as i64, hidden_size as i64];
+        let tensor = Tensor::from_array((shape, embeds.to_vec()))
+            .map_err(|e| anyhow::anyhow!("embeds tensor: {e}"))?;
+        let out = decoder
+            .run(ort::inputs![tensor])
+            .map_err(|e| anyhow::anyhow!("decoder run: {e}"))?;
+        let (logits_shape, logits_data) = out[0]
+            .try_extract_tensor::<f32>()
+            .map_err(|e| anyhow::anyhow!("extract logits: {e}"))?;
+
+        let vocab_size = logits_shape[logits_shape.len() - 1] as usize;
+        let total_len = logits_shape[1] as usize;
+        let last_start = (total_len - 1) * vocab_size;
+        Ok(logits_data[last_start..last_start + vocab_size].to_vec())
+    }
+
+    /// Greedy autoregressive decode: audio_embeds ++ token_embeds → text.
+    ///
+    /// No KV cache — re-runs full context each step. Acceptable for short
+    /// transcriptions (~50 tokens). For longer outputs, consider the HTTP backend.
+    fn decode(&self, audio_embeds: &[f32], audio_seq_len: usize) -> Result<String> {
         let bos_id: i64 = 1;
         let eos_id: i64 = 2;
         let max_new_tokens: usize = 448;
 
+        let hidden_size = audio_embeds.len() / audio_seq_len;
         let mut generated_ids: Vec<i64> = vec![bos_id];
 
-        let mut decoder = self.decoder.lock().unwrap();
-        let mut embed = self.embed_tokens.lock().unwrap();
+        // Build growing sequence: [audio_embeds || bos_embed || gen_token_embeds...]
+        let bos_embed = self.embed_token(bos_id)?;
+        let mut all_embeds: Vec<f32> = audio_embeds.to_vec();
+        all_embeds.extend_from_slice(&bos_embed);
 
         for _ in 0..max_new_tokens {
-            let last_id = *generated_ids.last().unwrap();
+            let current_seq_len = audio_seq_len + generated_ids.len();
+            let logits = self.decode_step(&all_embeds, current_seq_len, hidden_size)?;
 
-            // Embed the last token
-            let input_ids = Tensor::from_array(([1usize, 1], vec![last_id]))
-                .map_err(|e| anyhow::anyhow!("input_ids tensor: {e}"))?;
-
-            let embeddings = embed
-                .run(ort::inputs![input_ids])
-                .map_err(|e| anyhow::anyhow!("embed_tokens run: {e}"))?;
-
-            let (_emb_shape, emb_data) = embeddings[0]
-                .try_extract_tensor::<f32>()
-                .map_err(|e| anyhow::anyhow!("extract embeds: {e}"))?;
-
-            // Rebuild tensors for decoder (ort takes ownership)
-            let enc_shape_vec: Vec<i64> = enc_shape.to_vec();
-            let enc_tensor = Tensor::from_array((enc_shape_vec, enc_data.to_vec()))
-                .map_err(|e| anyhow::anyhow!("enc tensor: {e}"))?;
-            let emb_shape_vec: Vec<i64> = _emb_shape.to_vec();
-            let embeds_tensor = Tensor::from_array((emb_shape_vec, emb_data.to_vec()))
-                .map_err(|e| anyhow::anyhow!("embeds tensor: {e}"))?;
-
-            // Run decoder
-            let decoder_out = decoder
-                .run(ort::inputs![embeds_tensor, enc_tensor])
-                .map_err(|e| anyhow::anyhow!("decoder run: {e}"))?;
-
-            let (logits_shape, logits_data) = decoder_out[0]
-                .try_extract_tensor::<f32>()
-                .map_err(|e| anyhow::anyhow!("extract logits: {e}"))?;
-
-            // Greedy: argmax of last position
-            let vocab_size = logits_shape[logits_shape.len() - 1] as usize;
-            let seq_len = logits_shape[1] as usize;
-            let last_start = (seq_len - 1) * vocab_size;
-            let last_logits: &[f32] = &logits_data[last_start..last_start + vocab_size];
-
-            let next_id = last_logits
+            let next_id = logits
                 .iter()
                 .enumerate()
                 .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
@@ -195,6 +205,8 @@ impl OnnxTranscriber {
                 break;
             }
             generated_ids.push(next_id);
+            let token_embed = self.embed_token(next_id)?;
+            all_embeds.extend_from_slice(&token_embed);
         }
 
         let token_ids: Vec<u32> = generated_ids.iter().map(|&id| id as u32).collect();
@@ -219,7 +231,7 @@ impl SpeechTranscriber for OnnxTranscriber {
         // 1. Compute mel spectrogram
         let (mel_shape, mel_data) = self.mel_spectrogram(samples);
 
-        // 2. Run audio encoder
+        // 2. Run audio encoder (audio tower + projector)
         let mel_tensor = Tensor::from_array((mel_shape.as_slice(), mel_data))
             .map_err(|e| anyhow::anyhow!("mel tensor: {e}"))?;
 
@@ -232,13 +244,13 @@ impl SpeechTranscriber for OnnxTranscriber {
             .try_extract_tensor::<f32>()
             .map_err(|e| anyhow::anyhow!("extract encoder output: {e}"))?;
 
-        let enc_shape_vec: Vec<i64> = enc_shape.to_vec();
+        let audio_seq_len = enc_shape[1] as usize;
         let enc_data_vec: Vec<f32> = enc_data.to_vec();
         drop(encoder_out);
         drop(enc);
 
         // 3. Autoregressive decode
-        let text = self.decode(&enc_shape_vec, &enc_data_vec)?;
+        let text = self.decode(&enc_data_vec, audio_seq_len)?;
 
         Ok(TranscribeResult {
             text,
