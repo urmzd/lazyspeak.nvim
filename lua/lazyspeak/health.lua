@@ -17,9 +17,8 @@ function M.check()
 	if vim.fn.executable("llama-server") == 1 then
 		vim.health.ok("llama-server found")
 	else
-		vim.health.warn("llama-server not found (needed for local STT)", {
+		vim.health.warn("llama-server not found (needed for STT)", {
 			"Install: brew install llama.cpp",
-			"Or build from source: https://github.com/ggml-org/llama.cpp",
 		})
 	end
 
@@ -34,20 +33,20 @@ function M.check()
 	local install = require("lazyspeak.install")
 	if vim.fn.filereadable(install.MODEL_PATH) == 1 then
 		local size = vim.fn.getfsize(install.MODEL_PATH)
-		local size_gb = string.format("%.1f GB", size / (1024 * 1024 * 1024))
-		vim.health.ok("Voxtral model found (" .. size_gb .. ")")
+		if size > 1000000 then
+			local size_gb = string.format("%.1f GB", size / (1024 * 1024 * 1024))
+			vim.health.ok("Voxtral model found (" .. size_gb .. ")")
+		else
+			vim.health.warn("Voxtral model file is too small — may be corrupted", {
+				"Run: :LazySpeakInstall",
+				"Or: just convert-model",
+			})
+		end
 	else
-		vim.health.info("Voxtral model not downloaded", {
+		vim.health.info("Voxtral model not found", {
 			"Run: :LazySpeakInstall",
-			"Or: just download-model",
+			"Or: just convert-model",
 		})
-	end
-
-	-- curl (for model download)
-	if vim.fn.executable("curl") == 1 then
-		vim.health.ok("curl found")
-	else
-		vim.health.warn("curl not found (needed for model download)")
 	end
 
 	-- Plugin state

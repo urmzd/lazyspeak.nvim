@@ -6,7 +6,7 @@
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 /// Configuration for audio capture.
@@ -35,10 +35,7 @@ pub enum AudioEvent {
     /// VAD detected speech start/stop.
     Vad(bool),
     /// A complete utterance was captured.
-    Utterance {
-        samples: Vec<f32>,
-        duration_ms: u64,
-    },
+    Utterance { samples: Vec<f32>, duration_ms: u64 },
     /// An error occurred.
     Error(String),
 }

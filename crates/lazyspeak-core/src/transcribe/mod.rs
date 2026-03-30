@@ -3,14 +3,11 @@
 //! Defines the `SpeechTranscriber` trait — the single abstraction that
 //! decouples the daemon from any particular inference runtime.
 //!
-//! Backends:
+//! Backend:
 //! - `http`  — delegates to an external server (llama-server, vLLM, etc.)
-//! - `onnx`  — runs inference in-process via ONNX Runtime
 
 #[cfg(feature = "http")]
 pub mod http;
-#[cfg(feature = "onnx")]
-pub mod onnx;
 
 use anyhow::Result;
 

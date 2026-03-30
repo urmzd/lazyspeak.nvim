@@ -56,8 +56,9 @@ impl HttpTranscriber {
             anyhow::bail!("transcription endpoint returned {}", resp.status());
         }
 
-        let body: TranscriptionResponse =
-            resp.json().context("failed to parse transcription response")?;
+        let body: TranscriptionResponse = resp
+            .json()
+            .context("failed to parse transcription response")?;
         Ok(body.text.trim().to_string())
     }
 
