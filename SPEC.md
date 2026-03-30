@@ -150,7 +150,7 @@ Every adapter implements `lazyspeak.Adapter`. The plugin never talks protocol-sp
 #### 2. `crates/` — Rust daemon binary (~5 MB)
 
 - **lazyspeak-core**: library crate — audio capture (cpal), energy-based VAD, STT HTTP client, JSON lines protocol
-- **lazyspeak-cli**: binary crate — event loop wiring audio → STT → protocol over stdin/stdout
+- **lazyspeak**: binary crate — event loop wiring audio → STT → protocol over stdin/stdout
 - Single static binary, no runtime dependencies
 
 #### 3. Voxtral Mini 3B — local inference
@@ -457,7 +457,7 @@ Plugin ↔ Python daemon over stdin/stdout JSON lines.
 
 ```sh
 # Build daemon
-cargo install --path crates/lazyspeak-cli
+cargo install --path crates/lazyspeak
 
 # Download model
 just download-model
@@ -476,7 +476,7 @@ lazyspeak.nvim/
 │   │       ├── audio.rs      -- cpal mic capture + energy VAD
 │   │       ├── protocol.rs   -- JSON lines Command/Event types
 │   │       └── transcribe.rs -- HTTP STT client (llama-server)
-│   └── lazyspeak-cli/        -- binary: daemon entry point
+│   └── lazyspeak/            -- binary: daemon entry point
 │       └── src/
 │           └── main.rs       -- event loop wiring audio → STT → protocol
 ├── lua/

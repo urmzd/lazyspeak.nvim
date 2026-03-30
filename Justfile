@@ -20,7 +20,7 @@ test:
 
 # Install the daemon binary
 install:
-    cargo install --path crates/lazyspeak-cli
+    cargo install --path crates/lazyspeak
 
 # Run daemon in dev mode
 daemon-dev:
@@ -30,8 +30,14 @@ daemon-dev:
 nvim-dev:
     nvim --cmd 'set rtp+=.' -c 'lua require("lazyspeak").setup()'
 
-# Download Voxtral model
+# Convert official Voxtral model to ONNX (requires Python + deps)
+convert-model:
+    pip install transformers torch optimum[exporters] onnxruntime onnxslim
+    python scripts/convert_model.py
+
+# Download Voxtral GGUF model for HTTP/llama-server backend
 download-model:
     mkdir -p ~/.local/share/lazyspeak
-    curl -L -o ~/.local/share/lazyspeak/voxtral-mini-3b-q4_k_m.gguf \
+    curl -L -H "Authorization: Bearer ${HF_TOKEN}" \
+        -o ~/.local/share/lazyspeak/voxtral-mini-3b-q4_k_m.gguf \
         "https://huggingface.co/mistralai/Voxtral-Mini-3B-2507-GGUF/resolve/main/voxtral-mini-3b-q4_k_m.gguf"

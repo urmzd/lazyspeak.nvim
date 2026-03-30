@@ -37,19 +37,19 @@ function M.run()
 		end
 
 		if plugin_dir and vim.fn.isdirectory(plugin_dir .. "/crates") == 1 then
-			vim.fn.jobstart({ "cargo", "install", "--path", plugin_dir .. "/crates/lazyspeak-cli" }, {
+			vim.fn.jobstart({ "cargo", "install", "--path", plugin_dir .. "/crates/lazyspeak" }, {
 				on_exit = function(_, code, _)
 					vim.schedule(function()
 						if code == 0 then
 							vim.notify("[lazyspeak] daemon binary installed")
 						else
-							vim.notify("[lazyspeak] daemon build failed — run `cargo install --path crates/lazyspeak-cli` manually", vim.log.levels.ERROR)
+							vim.notify("[lazyspeak] daemon build failed — run `cargo install --path crates/lazyspeak` manually", vim.log.levels.ERROR)
 						end
 					end)
 				end,
 			})
 		else
-			vim.notify("[lazyspeak] could not find crates/ dir — run `cargo install --path crates/lazyspeak-cli` manually", vim.log.levels.WARN)
+			vim.notify("[lazyspeak] could not find crates/ dir — run `cargo install --path crates/lazyspeak` manually", vim.log.levels.WARN)
 		end
 	else
 		vim.notify("[lazyspeak] daemon binary already installed")
@@ -61,11 +61,15 @@ end
 ---@type number?
 M._llama_job_id = nil
 
---- Check if a llama-server is already responding on the given port.
+local DEFAULT_PORT = 8674
+local HEALTH_PATH = "/health"
+
+--- Check if a server is already responding on the given port.
 ---@param port number
 ---@return boolean
 function M.is_server_running(port)
-	local handle = io.popen(string.format("curl -sf http://127.0.0.1:%d/health 2>/dev/null", port))
+	local url = string.format("http://127.0.0.1:%d%s", port, HEALTH_PATH)
+	local handle = io.popen(string.format("curl -sf %s 2>/dev/null", url))
 	if not handle then
 		return false
 	end
@@ -79,7 +83,7 @@ end
 ---@param on_ready? fun() called once the server is healthy
 function M.start_llama_server(opts, on_ready)
 	opts = opts or {}
-	local port = opts.port or 8674
+	local port = opts.port or DEFAULT_PORT
 	local model_path = vim.fn.expand(opts.model_path or MODEL_PATH)
 
 	-- Already managed by us

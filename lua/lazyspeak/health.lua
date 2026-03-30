@@ -8,7 +8,7 @@ function M.check()
 		vim.health.ok("daemon binary found in PATH")
 	else
 		vim.health.warn("daemon binary not in PATH", {
-			"Run: cargo install --path crates/lazyspeak-cli",
+			"Run: cargo install --path crates/lazyspeak",
 			"Or: just install",
 		})
 	end

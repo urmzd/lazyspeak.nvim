@@ -8,7 +8,7 @@ local M = {}
 local Voice = {}
 Voice.__index = Voice
 
----@param opts? { daemon_cmd?: string }
+---@param opts? { daemon_cmd?: string, env?: table<string, string> }
 function Voice:new(opts)
 	opts = opts or {}
 	return setmetatable({
@@ -16,6 +16,7 @@ function Voice:new(opts)
 		partial = "",
 		callbacks = {},
 		daemon_cmd = opts.daemon_cmd or "lazyspeak",
+		env = opts.env or {},
 	}, Voice)
 end
 
@@ -48,6 +49,7 @@ function Voice:start()
 	end
 
 	self.job_id = vim.fn.jobstart({ self.daemon_cmd }, {
+		env = self.env,
 		on_stdout = function(_, data, _)
 			-- data is a list of strings split by newlines.
 			-- Last element may be partial (empty string if line was complete).

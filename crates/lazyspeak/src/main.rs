@@ -1,8 +1,9 @@
 use anyhow::Result;
 use lazyspeak_core::audio::{AudioCapture, AudioConfig, AudioEvent};
 use lazyspeak_core::protocol::{parse_command, serialize_event, Command, Event, State};
-use lazyspeak_core::transcribe::{Transcriber, TranscriberConfig};
+use lazyspeak_core::transcribe::SpeechTranscriber;
 use std::io::{self, BufRead, Write};
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
 
@@ -14,6 +15,49 @@ fn emit(event: &Event) -> Result<()> {
     Ok(())
 }
 
+/// Build the appropriate transcription backend from environment variables.
+///
+/// LAZYSPEAK_BACKEND     — "http" (default) or "onnx"
+/// LAZYSPEAK_STT_URL     — server URL for the http backend
+/// LAZYSPEAK_MODEL_DIR   — ONNX model directory for the onnx backend
+/// LAZYSPEAK_MODEL_VARIANT — ONNX quantisation suffix (default "_q4")
+fn build_transcriber() -> Result<Box<dyn SpeechTranscriber>> {
+    let backend = std::env::var("LAZYSPEAK_BACKEND").unwrap_or_else(|_| "http".to_string());
+
+    match backend.as_str() {
+        #[cfg(feature = "http")]
+        "http" => {
+            use lazyspeak_core::transcribe::http::{
+                HttpTranscriber, HttpTranscriberConfig, DEFAULT_SERVER_URL,
+            };
+            let server_url = std::env::var("LAZYSPEAK_STT_URL")
+                .unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string());
+            let transcriber = HttpTranscriber::new(HttpTranscriberConfig { server_url });
+            Ok(Box::new(transcriber))
+        }
+        #[cfg(feature = "onnx")]
+        "onnx" => {
+            use lazyspeak_core::transcribe::onnx::{
+                OnnxTranscriber, OnnxTranscriberConfig, DEFAULT_MODEL_DIR, DEFAULT_VARIANT,
+            };
+            let model_dir = std::env::var("LAZYSPEAK_MODEL_DIR")
+                .unwrap_or_else(|_| shellexpand::tilde(DEFAULT_MODEL_DIR).to_string());
+            let variant = std::env::var("LAZYSPEAK_MODEL_VARIANT")
+                .unwrap_or_else(|_| DEFAULT_VARIANT.to_string());
+            let tokenizer_path = std::env::var("LAZYSPEAK_TOKENIZER_PATH")
+                .ok()
+                .map(PathBuf::from);
+            let transcriber = OnnxTranscriber::new(OnnxTranscriberConfig {
+                model_dir: model_dir.into(),
+                variant,
+                tokenizer_path,
+            })?;
+            Ok(Box::new(transcriber))
+        }
+        other => anyhow::bail!("unknown backend: {other} (expected \"http\" or \"onnx\")"),
+    }
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_writer(io::stderr)
@@ -22,19 +66,14 @@ fn main() -> Result<()> {
 
     emit(&Event::Status { state: State::Idle })?;
 
-    // Parse server URL from env or use default
-    let server_url =
-        std::env::var("LAZYSPEAK_STT_URL").unwrap_or_else(|_| "http://127.0.0.1:8674".to_string());
+    let transcriber = build_transcriber()?;
 
-    let transcriber = Transcriber::new(TranscriberConfig {
-        server_url: server_url.clone(),
-    });
-
-    let stt_available = transcriber.health_check();
+    let backend_name = transcriber.name();
+    let stt_available = transcriber.is_ready();
     if stt_available {
-        tracing::info!("STT server reachable at {server_url}");
+        tracing::info!("STT backend ready ({backend_name})");
     } else {
-        tracing::warn!("STT server not reachable at {server_url} — will emit placeholder transcripts");
+        tracing::warn!("STT backend not ready ({backend_name}) — will emit placeholder transcripts");
     }
 
     let audio = AudioCapture::new(AudioConfig::default());
@@ -67,7 +106,7 @@ fn main() -> Result<()> {
                             }
                         }
                     } else {
-                        format!("[audio {duration_ms}ms — STT server not available]")
+                        format!("[audio {duration_ms}ms — STT backend not available]")
                     };
 
                     let _ = emit(&Event::Transcript {

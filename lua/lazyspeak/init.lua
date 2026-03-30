@@ -2,17 +2,21 @@ local Voice = require("lazyspeak.voice").Voice
 local Core = require("lazyspeak.core").Core
 local Float = require("lazyspeak.ui").Float
 local ui = require("lazyspeak.ui")
+local install = require("lazyspeak.install")
 
 local M = {}
 
 ---@class lazyspeak.Config
 ---@field agent { adapter: string, cmd?: string[], auto_approve?: boolean }
----@field model { path: string, server_port: number, server_url?: string }
+---@field model { backend: string, path: string, server_port: number, server_url?: string, onnx_dir?: string, onnx_variant?: string }
 ---@field audio { sample_rate: number, channels: number, vad_threshold: number, silence_duration_ms: number, max_duration_ms: number }
 ---@field ui { float_position: string, float_width: number, show_waveform: boolean, statusline: boolean }
 ---@field snapshot { enabled: boolean, max_stack: number, use_git: boolean }
 ---@field keys { push_to_talk: string, toggle_listen: string, cancel: string, history: string, undo: string, switch_agent: string }
 ---@field daemon_cmd? string
+
+-- Default port — single source of truth for Lua side (matches DEFAULT_SERVER_URL in http.rs)
+local DEFAULT_PORT = 8674
 
 ---@type lazyspeak.Config
 M.defaults = {
@@ -20,8 +24,11 @@ M.defaults = {
 		adapter = "claudecode",
 	},
 	model = {
-		path = "~/.local/share/lazyspeak/voxtral-mini-3b-q4_k_m.gguf",
-		server_port = 8674,
+		backend = "http", -- "http" | "onnx"
+		path = install.MODEL_PATH,
+		server_port = DEFAULT_PORT,
+		onnx_dir = "~/.local/share/lazyspeak/onnx",
+		onnx_variant = "_q4",
 	},
 	audio = {
 		sample_rate = 16000,
@@ -105,24 +112,51 @@ function M.setup(opts)
 	end, { desc = "lazyspeak: undo last edit" })
 end
 
+--- Build the environment variable table for the daemon process.
+--- Single place that translates plugin config -> daemon env vars.
+---@param model table the model config table
+---@return table<string, string>
+local function build_daemon_env(model)
+	local env = { LAZYSPEAK_BACKEND = model.backend }
+
+	if model.backend == "onnx" then
+		env.LAZYSPEAK_MODEL_DIR = vim.fn.expand(model.onnx_dir or "")
+		env.LAZYSPEAK_MODEL_VARIANT = model.onnx_variant or ""
+	else
+		env.LAZYSPEAK_STT_URL = model.server_url
+			or ("http://127.0.0.1:" .. model.server_port)
+	end
+
+	return env
+end
+
+--- Ensure the required server is running for the configured backend,
+--- then call `on_ready`. ONNX is self-contained; HTTP needs llama-server.
+---@param model table the model config table
+---@param on_ready fun()
+local function ensure_server(model, on_ready)
+	if model.backend == "onnx" then
+		on_ready()
+	else
+		install.start_llama_server({
+			port = model.server_port,
+			model_path = model.path,
+		}, on_ready)
+	end
+end
+
 --- Start voice + core + UI, auto-launching llama-server if needed.
 function M.start()
 	if M._voice and M._voice:is_running() then
 		return
 	end
 
-	local install = require("lazyspeak.install")
-
-	-- Auto-start llama-server, then bring up the rest once it's ready
-	install.start_llama_server({
-		port = M.config.model.server_port,
-		model_path = M.config.model.path,
-	}, function()
+	ensure_server(M.config.model, function()
 		M._start_pipeline()
 	end)
 end
 
---- Internal: start the voice daemon, core, and UI (called after llama-server is ready).
+--- Internal: start the voice daemon, core, and UI (called after server is ready).
 function M._start_pipeline()
 	if M._voice and M._voice:is_running() then
 		return
@@ -155,7 +189,8 @@ function M._start_pipeline()
 	M._core:start()
 
 	-- Initialize voice daemon
-	M._voice = Voice:new({ daemon_cmd = M.config.daemon_cmd })
+	local daemon_env = build_daemon_env(M.config.model)
+	M._voice = Voice:new({ daemon_cmd = M.config.daemon_cmd, env = daemon_env })
 
 	M._voice:on_transcript(function(text, duration_ms)
 		M._state = "dispatching"

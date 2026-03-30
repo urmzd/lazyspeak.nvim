@@ -15,8 +15,14 @@ No cloud STT dependency. No TTS. You speak, it codes.
 |------|---------|---------|
 | Neovim >= 0.10 | Editor | [neovim.io](https://neovim.io) |
 | Rust toolchain | Build daemon binary | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
-| llama.cpp (`llama-server`) | Local STT inference | `brew install llama.cpp` or [build from source](https://github.com/ggml-org/llama.cpp#build) |
 | An ACP agent **or** Claude Code | Coding intelligence | See [Agent Setup](#agent-setup) |
+
+Plus **one** of the two STT backends:
+
+| Backend | Extra deps | Model size | Notes |
+|---------|-----------|------------|-------|
+| **ONNX** (recommended) | Python (for one-time conversion) | ~3 GB (q4) | Self-contained, no server |
+| **HTTP** | `llama-server` (llama.cpp) | ~2.5 GB (GGUF) | Delegates to external server |
 
 Optional: [just](https://github.com/casey/just) for convenient dev commands.
 
@@ -40,6 +46,49 @@ Optional: [just](https://github.com/casey/just) for convenient dev commands.
 
 When you run `:LazySpeakStart`, the plugin automatically starts `llama-server` with the model if it isn't already running. It shuts down with `:LazySpeakStop`.
 
+### STT Backend Setup
+
+#### Option A: ONNX (recommended — no server needed)
+
+Convert the official [mistralai/Voxtral-Mini-3B-2507](https://huggingface.co/mistralai/Voxtral-Mini-3B-2507) (Apache 2.0, ungated) to ONNX locally:
+
+```sh
+pip install transformers torch optimum[exporters] onnxruntime onnxslim
+python scripts/convert_model.py
+```
+
+Or with just:
+```sh
+just convert-model
+```
+
+This downloads from Mistral's official repo and exports ONNX files to `~/.local/share/lazyspeak/onnx/`.
+
+Then configure the daemon to use the ONNX backend:
+```sh
+export LAZYSPEAK_BACKEND=onnx
+```
+
+#### Option B: HTTP (llama-server)
+
+Requires `llama-server` from [llama.cpp](https://github.com/ggml-org/llama.cpp):
+```sh
+brew install llama.cpp
+```
+
+The GGUF model is gated on HuggingFace — you need a token:
+
+1. Accept the license at [mistralai/Voxtral-Mini-3B-2507-GGUF](https://huggingface.co/mistralai/Voxtral-Mini-3B-2507-GGUF)
+2. Create an [access token](https://huggingface.co/settings/tokens)
+3. Download:
+
+```sh
+export HF_TOKEN="hf_your_token_here"
+just download-model
+```
+
+The plugin auto-starts `llama-server` when you run `:LazySpeakStart`.
+
 ### Manual installation
 
 ```sh
@@ -48,19 +97,11 @@ git clone https://github.com/urmzd/lazyspeak.nvim ~/.local/share/nvim/lazy/lazys
 
 # 2. Build and install the daemon binary
 cd ~/.local/share/nvim/lazy/lazyspeak.nvim
-cargo install --path crates/lazyspeak-cli
+cargo install --path crates/lazyspeak
 
-# 3. Download the Voxtral Mini 3B model (~2.5 GB)
-mkdir -p ~/.local/share/lazyspeak
-curl -L -o ~/.local/share/lazyspeak/voxtral-mini-3b-q4_k_m.gguf \
-    "https://huggingface.co/mistralai/Voxtral-Mini-3B-2507-GGUF/resolve/main/voxtral-mini-3b-q4_k_m.gguf"
-```
-
-Or with `just`:
-
-```sh
-just install
-just download-model
+# 3. Set up a backend (pick one)
+just convert-model   # ONNX
+just download-model  # HTTP (requires HF_TOKEN)
 ```
 
 ### Verify installation
@@ -70,8 +111,6 @@ Open Neovim and run:
 ```vim
 :checkhealth lazyspeak
 ```
-
-This checks that the daemon binary, model file, and llama-server are all reachable.
 
 ## Agent Setup
 
@@ -163,9 +202,14 @@ require("lazyspeak").setup({
   },
 
   model = {
+    backend = "http",  -- "http" | "onnx"
+    -- HTTP backend
     path = "~/.local/share/lazyspeak/voxtral-mini-3b-q4_k_m.gguf",
     server_port = 8674,
     -- server_url = "http://127.0.0.1:8080",  -- connect to existing server
+    -- ONNX backend
+    -- onnx_dir = "~/.local/share/lazyspeak/onnx",
+    -- onnx_variant = "_q4",
   },
 
   audio = {
@@ -210,27 +254,36 @@ Neovim (Lua plugin)
 lazyspeak daemon (Rust binary)
   |  - mic capture (cpal)
   |  - energy-based VAD
-  |  - STT HTTP client
-  v
-llama-server (llama.cpp)
-  |  - Voxtral Mini 3B Q4
-  |  - Metal accelerated
+  |  - STT via pluggable backend:
+  |      ONNX: in-process inference (ort)
+  |      HTTP: external server (llama-server, vLLM, etc.)
   v
 transcript -> adapter -> agent -> edits applied in Neovim
 ```
 
-The plugin uses an Internal Representation (IR) to decouple from any specific agent protocol. All adapters translate between IR types and their respective wire formats.
+The daemon uses a `SpeechTranscriber` trait to abstract over STT backends. The plugin uses an Internal Representation (IR) to decouple from any specific agent protocol. Both layers are pluggable.
 
 ## Development
 
 ```sh
-just build       # Build daemon (release)
-just test        # Run tests
-just lint        # Clippy + format check
-just fmt         # Format code
-just daemon-dev  # Run daemon in dev mode
-just nvim-dev    # Launch Neovim with plugin loaded
+just build          # Build daemon (release)
+just test           # Run tests
+just lint           # Clippy + format check
+just fmt            # Format code
+just daemon-dev     # Run daemon in dev mode
+just nvim-dev       # Launch Neovim with plugin loaded
+just convert-model  # Convert Voxtral to ONNX
+just download-model # Download GGUF for HTTP backend
 ```
+
+### Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LAZYSPEAK_BACKEND` | `http` | STT backend: `http` or `onnx` |
+| `LAZYSPEAK_STT_URL` | `http://127.0.0.1:8674` | Server URL (http backend) |
+| `LAZYSPEAK_MODEL_DIR` | `~/.local/share/lazyspeak/onnx` | ONNX model directory |
+| `LAZYSPEAK_MODEL_VARIANT` | `_q4` | ONNX quantisation suffix |
 
 ## License
 

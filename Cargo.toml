@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/lazyspeak-core", "crates/lazyspeak-cli"]
+members = ["crates/lazyspeak-core", "crates/lazyspeak"]
 
 [workspace.package]
 version = "0.1.0"
