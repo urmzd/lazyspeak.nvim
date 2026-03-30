@@ -7,9 +7,8 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["http", "onnx"]
+default = ["http"]
 http = ["dep:reqwest", "dep:base64", "dep:hound"]
-onnx = ["dep:ort", "dep:ndarray", "dep:rustfft", "dep:tokenizers", "dep:shellexpand"]
 
 [dependencies]
 serde.workspace = true
@@ -19,14 +18,7 @@ anyhow.workspace = true
 tracing.workspace = true
 cpal = "0.15"
 
-# http backend
+# http backend (llama-server, vLLM, etc.)
 reqwest = { version = "0.12", features = ["json", "multipart", "blocking"], optional = true }
 base64 = { version = "0.22", optional = true }
 hound = { version = "3.5", optional = true }
-
-# onnx backend
-ort = { version = "2.0.0-rc.12", features = ["download-binaries"], optional = true }
-ndarray = { version = "0.17", optional = true }
-rustfft = { version = "6", optional = true }
-tokenizers = { version = "0.21", optional = true }
-shellexpand = { version = "3", optional = true }

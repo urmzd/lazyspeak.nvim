@@ -1,30 +1,10 @@
 use anyhow::Result;
 use lazyspeak_core::audio::{AudioCapture, AudioConfig, AudioEvent};
 use lazyspeak_core::protocol::{Command, Event, State, parse_command, serialize_event};
-use lazyspeak_core::transcribe::{SpeechTranscriber, TranscribeResult};
+use lazyspeak_core::transcribe::SpeechTranscriber;
 use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
-
-/// Stub transcriber used when the real backend fails to initialise.
-struct StubTranscriber {
-    reason: String,
-}
-
-impl SpeechTranscriber for StubTranscriber {
-    fn transcribe(&self, _samples: &[f32], _sample_rate: u32) -> Result<TranscribeResult> {
-        anyhow::bail!("STT unavailable: {}", self.reason)
-    }
-
-    fn is_ready(&self) -> bool {
-        false
-    }
-
-    fn name(&self) -> &str {
-        "stub"
-    }
-}
 
 fn emit(event: &Event) -> Result<()> {
     let line = serialize_event(event)?;
@@ -34,47 +14,17 @@ fn emit(event: &Event) -> Result<()> {
     Ok(())
 }
 
-/// Build the appropriate transcription backend from environment variables.
+/// Build the HTTP transcription backend from environment variables.
 ///
-/// LAZYSPEAK_BACKEND     — "onnx" (default) or "http"
-/// LAZYSPEAK_STT_URL     — server URL for the http backend
-/// LAZYSPEAK_MODEL_DIR   — ONNX model directory for the onnx backend
-/// LAZYSPEAK_MODEL_VARIANT — ONNX quantisation suffix (default "_q4")
+/// LAZYSPEAK_STT_URL — server URL (default http://127.0.0.1:8674)
 fn build_transcriber() -> Result<Box<dyn SpeechTranscriber>> {
-    let backend = std::env::var("LAZYSPEAK_BACKEND").unwrap_or_else(|_| "onnx".to_string());
-
-    match backend.as_str() {
-        #[cfg(feature = "http")]
-        "http" => {
-            use lazyspeak_core::transcribe::http::{
-                DEFAULT_SERVER_URL, HttpTranscriber, HttpTranscriberConfig,
-            };
-            let server_url = std::env::var("LAZYSPEAK_STT_URL")
-                .unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string());
-            let transcriber = HttpTranscriber::new(HttpTranscriberConfig { server_url });
-            Ok(Box::new(transcriber))
-        }
-        #[cfg(feature = "onnx")]
-        "onnx" => {
-            use lazyspeak_core::transcribe::onnx::{
-                DEFAULT_MODEL_DIR, DEFAULT_VARIANT, OnnxTranscriber, OnnxTranscriberConfig,
-            };
-            let model_dir = std::env::var("LAZYSPEAK_MODEL_DIR")
-                .unwrap_or_else(|_| shellexpand::tilde(DEFAULT_MODEL_DIR).to_string());
-            let variant = std::env::var("LAZYSPEAK_MODEL_VARIANT")
-                .unwrap_or_else(|_| DEFAULT_VARIANT.to_string());
-            let tokenizer_path = std::env::var("LAZYSPEAK_TOKENIZER_PATH")
-                .ok()
-                .map(PathBuf::from);
-            let transcriber = OnnxTranscriber::new(OnnxTranscriberConfig {
-                model_dir: model_dir.into(),
-                variant,
-                tokenizer_path,
-            })?;
-            Ok(Box::new(transcriber))
-        }
-        other => anyhow::bail!("unknown backend: {other} (expected \"http\" or \"onnx\")"),
-    }
+    use lazyspeak_core::transcribe::http::{
+        DEFAULT_SERVER_URL, HttpTranscriber, HttpTranscriberConfig,
+    };
+    let server_url = std::env::var("LAZYSPEAK_STT_URL")
+        .unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string());
+    let transcriber = HttpTranscriber::new(HttpTranscriberConfig { server_url });
+    Ok(Box::new(transcriber))
 }
 
 fn main() -> Result<()> {
@@ -85,15 +35,7 @@ fn main() -> Result<()> {
 
     emit(&Event::Status { state: State::Idle })?;
 
-    let transcriber = match build_transcriber() {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::warn!("failed to initialise STT backend: {e}");
-            Box::new(StubTranscriber {
-                reason: e.to_string(),
-            }) as Box<dyn SpeechTranscriber>
-        }
-    };
+    let transcriber = build_transcriber()?;
 
     let backend_name = transcriber.name();
     let stt_available = transcriber.is_ready();
