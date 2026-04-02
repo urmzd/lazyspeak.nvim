@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.1 (2026-04-02)
+
+### Bug Fixes
+
+- add version to lazyspeak-core workspace dependency ([4620c0b](https://github.com/urmzd/lazyspeak.nvim/commit/4620c0b7b991e19bbcca959f91f05edd4f8c86e6))
+
+[Full Changelog](https://github.com/urmzd/lazyspeak.nvim/compare/v0.1.0...v0.1.1)
+
+
 ## 0.1.0 (2026-04-02)
 
 ### Features
