@@ -106,22 +106,35 @@ function M.start_llama_server(opts, on_ready)
 		return
 	end
 
-	-- Poll until server is healthy (up to 30s)
+	-- Poll until server is healthy (up to 120s — model loading can be slow)
 	if on_ready then
 		local attempts = 0
-		local max_attempts = 60
+		local max_attempts = 240
 		local timer = vim.uv.new_timer()
+		local closed = false
 		timer:start(500, 500, vim.schedule_wrap(function()
+			if closed then return end
 			attempts = attempts + 1
+
+			local done = false
 			if M.is_server_running(port) then
-				timer:stop()
-				timer:close()
 				vim.notify("[lazyspeak] llama-server ready")
 				on_ready()
+				done = true
+			elseif M._llama_job_id == nil then
+				vim.notify("[lazyspeak] llama-server failed to start", vim.log.levels.ERROR)
+				done = true
 			elseif attempts >= max_attempts then
+				vim.notify("[lazyspeak] llama-server did not become ready in 120s", vim.log.levels.ERROR)
+				done = true
+			end
+
+			if done then
+				closed = true
 				timer:stop()
-				timer:close()
-				vim.notify("[lazyspeak] llama-server did not become ready in time", vim.log.levels.ERROR)
+				if not timer:is_closing() then
+					timer:close()
+				end
 			end
 		end))
 	end
