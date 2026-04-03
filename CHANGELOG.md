@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.2 (2026-04-03)
+
+### Bug Fixes
+
+- **ci**: install libasound2-dev for publish verification ([531329a](https://github.com/urmzd/lazyspeak.nvim/commit/531329a13ba1e423c2bbed8ed6d6cc4a070942b4))
+
+[Full Changelog](https://github.com/urmzd/lazyspeak.nvim/compare/v0.1.1...v0.1.2)
+
+
 ## 0.1.1 (2026-04-02)
 
 ### Bug Fixes
