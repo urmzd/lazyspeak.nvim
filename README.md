@@ -2,6 +2,10 @@
 
 Voice-driven coding for Neovim. Speak your intent, edits appear in your editor.
 
+<p align="center">
+  <img src="showcase/lazyspeak-demo.gif" alt="lazyspeak.nvim demo" width="600">
+</p>
+
 ```
 Mic -> Voxtral Mini 3B (local STT) -> transcript -> adapter -> agent -> Neovim
          ~2.4 GB GGUF, Apache 2.0      ACP or Claude Code IDE protocol
