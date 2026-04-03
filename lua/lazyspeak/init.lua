@@ -21,7 +21,7 @@ M.defaults = {
 		adapter = "claudecode",
 	},
 	model = {
-		path = install.MODEL_PATH,
+		hf_repo = install.HF_REPO,
 		server_port = install.DEFAULT_PORT,
 		-- server_url = "http://127.0.0.1:8674",  -- override to use external server
 	},
@@ -125,7 +125,7 @@ function M.start()
 	if not M.config.model.server_url then
 		install.start_llama_server({
 			port = M.config.model.server_port,
-			model_path = M.config.model.path,
+			hf_repo = M.config.model.hf_repo,
 		}, function()
 			M._start_pipeline()
 		end)

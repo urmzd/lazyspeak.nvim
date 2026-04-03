@@ -61,8 +61,4 @@ daemon-dev:
 nvim-dev:
     nvim --cmd 'set rtp+=.' -c 'lua require("lazyspeak").setup()'
 
-# Convert Voxtral HF model to GGUF Q4_K_M (requires Python + llama.cpp)
-convert-model:
-    pip install gguf transformers torch mistral-common
-    python scripts/convert_model.py
 

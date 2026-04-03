@@ -8,7 +8,7 @@ Voice-driven coding for Neovim. Speak your intent, edits appear in your editor.
 
 ```
 Mic -> Voxtral Mini 3B (local STT) -> transcript -> adapter -> agent -> Neovim
-         ~2.4 GB GGUF, Apache 2.0      ACP or Claude Code IDE protocol
+         ~3.2 GB GGUF, Apache 2.0      ACP or Claude Code IDE protocol
 ```
 
 No cloud STT dependency. No TTS. You speak, it codes.
@@ -20,7 +20,6 @@ No cloud STT dependency. No TTS. You speak, it codes.
 | Neovim >= 0.10 | Editor | [neovim.io](https://neovim.io) |
 | Rust toolchain | Build daemon binary | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
 | llama.cpp | Local STT inference | `brew install llama.cpp` |
-| Python 3 | One-time model conversion | [python.org](https://python.org) |
 | An ACP agent **or** Claude Code | Coding intelligence | See [Agent Setup](#agent-setup) |
 
 Optional: [just](https://github.com/casey/just) for convenient dev commands.
@@ -39,27 +38,9 @@ Optional: [just](https://github.com/casey/just) for convenient dev commands.
 }
 ```
 
-`:LazySpeakInstall` will:
-1. Build and install the `lazyspeak` daemon binary via `cargo install`
-2. Convert [mistralai/Voxtral-Mini-3B-2507](https://huggingface.co/mistralai/Voxtral-Mini-3B-2507) (Apache 2.0, ungated) to GGUF Q4_K_M (~2.4 GB)
+`:LazySpeakInstall` will build and install the `lazyspeak` daemon binary via `cargo install`.
 
-When you run `:LazySpeakStart`, the plugin automatically starts `llama-server` with the model. It shuts down with `:LazySpeakStop`.
-
-### STT Model Setup
-
-Convert the official Voxtral model to GGUF locally:
-
-```sh
-pip install gguf transformers torch mistral-common sentencepiece
-python scripts/convert_model.py
-```
-
-Or with just:
-```sh
-just convert-model
-```
-
-This downloads from [mistralai/Voxtral-Mini-3B-2507](https://huggingface.co/mistralai/Voxtral-Mini-3B-2507) (ungated), converts to GGUF F16 via `convert_hf_to_gguf.py`, then quantizes to Q4_K_M (~2.4 GB) at `~/.local/share/lazyspeak/`.
+When you run `:LazySpeakStart`, the plugin automatically starts `llama-server` which downloads [ggml-org/Voxtral-Mini-3B-2507-GGUF](https://huggingface.co/ggml-org/Voxtral-Mini-3B-2507-GGUF) (Apache 2.0, ~3.2 GB) on first run. It shuts down with `:LazySpeakStop`.
 
 #### External STT server (advanced)
 
@@ -84,9 +65,6 @@ git clone https://github.com/urmzd/lazyspeak.nvim ~/.local/share/nvim/lazy/lazys
 # 2. Build and install the daemon binary
 cd ~/.local/share/nvim/lazy/lazyspeak.nvim
 cargo install --path crates/lazyspeak
-
-# 3. Convert the model
-just convert-model
 ```
 
 ### Verify installation
@@ -152,7 +130,7 @@ require("lazyspeak").setup({
 | `:LazySpeakUndo` | Revert last agent edit |
 | `:LazySpeakSnapshots` | List snapshots for current session |
 | `:LazySpeakAgent [cmd]` | Switch ACP agent |
-| `:LazySpeakInstall` | Convert model + build daemon |
+| `:LazySpeakInstall` | Build daemon binary |
 
 ### Voice commands
 
@@ -187,7 +165,7 @@ require("lazyspeak").setup({
   },
 
   model = {
-    path = "~/.local/share/lazyspeak/voxtral-mini-3b-q4_k_m.gguf",
+    hf_repo = "ggml-org/Voxtral-Mini-3B-2507-GGUF",
     server_port = 8674,
     -- server_url = "http://127.0.0.1:8674",  -- use external server
   },
@@ -250,7 +228,6 @@ just lint           # Clippy + format check
 just fmt            # Format code
 just daemon-dev     # Run daemon in dev mode
 just nvim-dev       # Launch Neovim with plugin loaded
-just convert-model  # Convert Voxtral to GGUF
 ```
 
 ### Environment variables

@@ -1,16 +1,11 @@
 local M = {}
 
-local DATA_DIR = vim.fn.expand("~/.local/share/lazyspeak")
-local MODEL_NAME = "voxtral-mini-3b-q4_k_m.gguf"
-local MODEL_PATH = DATA_DIR .. "/" .. MODEL_NAME
-
 local DEFAULT_PORT = 8674
 local HEALTH_PATH = "/health"
+local HF_REPO = "ggml-org/Voxtral-Mini-3B-2507-GGUF"
 
---- Install daemon binary and convert the model to GGUF.
+--- Install daemon binary (model is auto-downloaded by llama-server via -hf).
 function M.run()
-	vim.fn.mkdir(DATA_DIR, "p")
-
 	-- Build daemon binary
 	if vim.fn.executable("lazyspeak") == 0 then
 		vim.notify("[lazyspeak] building daemon binary...")
@@ -38,37 +33,7 @@ function M.run()
 		vim.notify("[lazyspeak] daemon binary already installed")
 	end
 
-	-- Convert model to GGUF if not present
-	if vim.fn.filereadable(MODEL_PATH) == 1 then
-		local size = vim.fn.getfsize(MODEL_PATH)
-		if size > 1000000 then -- > 1MB = real file
-			vim.notify("[lazyspeak] model already exists at " .. MODEL_PATH)
-			return
-		end
-	end
-
-	vim.notify("[lazyspeak] converting Voxtral model to GGUF (requires Python + llama.cpp)...")
-	local plugin_dir = debug.getinfo(1, "S").source:match("@(.*/)")
-	if plugin_dir then
-		plugin_dir = plugin_dir:gsub("/lua/lazyspeak/$", "")
-	end
-
-	local script = plugin_dir and (plugin_dir .. "/scripts/convert_model.py") or nil
-	if script and vim.fn.filereadable(script) == 1 then
-		vim.fn.jobstart({ "python3", script }, {
-			on_exit = function(_, code, _)
-				vim.schedule(function()
-					if code == 0 then
-						vim.notify("[lazyspeak] model ready at " .. MODEL_PATH)
-					else
-						vim.notify("[lazyspeak] model conversion failed — run `just convert-model` manually", vim.log.levels.ERROR)
-					end
-				end)
-			end,
-		})
-	else
-		vim.notify("[lazyspeak] convert script not found — run `just convert-model` manually", vim.log.levels.WARN)
-	end
+	vim.notify("[lazyspeak] model will be auto-downloaded on first :LazySpeakStart via llama-server -hf " .. HF_REPO)
 end
 
 -- llama-server process management
@@ -91,12 +56,13 @@ function M.is_server_running(port)
 end
 
 --- Start llama-server with the Voxtral model if not already running.
----@param opts? { port?: number, model_path?: string }
+--- Uses -hf to auto-download model + mmproj from HuggingFace on first run.
+---@param opts? { port?: number, hf_repo?: string }
 ---@param on_ready? fun() called once the server is healthy
 function M.start_llama_server(opts, on_ready)
 	opts = opts or {}
 	local port = opts.port or DEFAULT_PORT
-	local model_path = vim.fn.expand(opts.model_path or MODEL_PATH)
+	local hf_repo = opts.hf_repo or HF_REPO
 
 	-- Already managed by us
 	if M._llama_job_id then
@@ -111,23 +77,17 @@ function M.start_llama_server(opts, on_ready)
 		return
 	end
 
-	-- Model must exist
-	if vim.fn.filereadable(model_path) ~= 1 then
-		vim.notify("[lazyspeak] model not found at " .. model_path .. " — run :LazySpeakInstall first", vim.log.levels.ERROR)
-		return
-	end
-
 	-- llama-server must be installed
 	if vim.fn.executable("llama-server") ~= 1 then
 		vim.notify("[lazyspeak] llama-server not found — install llama.cpp (brew install llama.cpp)", vim.log.levels.ERROR)
 		return
 	end
 
-	vim.notify("[lazyspeak] starting llama-server on port " .. port .. "...")
+	vim.notify("[lazyspeak] starting llama-server on port " .. port .. " (model: " .. hf_repo .. ")...")
 
 	M._llama_job_id = vim.fn.jobstart({
 		"llama-server",
-		"-m", model_path,
+		"-hf", hf_repo,
 		"--port", tostring(port),
 	}, {
 		on_exit = function(_, code, _)
@@ -175,8 +135,7 @@ function M.stop_llama_server()
 	end
 end
 
-M.MODEL_PATH = MODEL_PATH
-M.DATA_DIR = DATA_DIR
+M.HF_REPO = HF_REPO
 M.DEFAULT_PORT = DEFAULT_PORT
 
 return M
