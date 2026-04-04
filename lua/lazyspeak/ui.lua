@@ -109,7 +109,10 @@ function Float:_render()
 
 	-- State indicator
 	local indicators = {
-		listening = "  listening...",
+		starting_server = "  starting STT server...",
+		starting_daemon = "  starting daemon...",
+		ready = "  press <Space> to record",
+		listening = "  recording... <Space> to send",
 		transcribing = "  transcribing...",
 		dispatching = "  sending to agent...",
 		idle = "  idle",

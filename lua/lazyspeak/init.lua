@@ -21,7 +21,7 @@ M.defaults = {
 		adapter = "claudecode",
 	},
 	model = {
-		path = install.MODEL_PATH,
+		hf_repo = install.HF_REPO,
 		server_port = install.DEFAULT_PORT,
 		-- server_url = "http://127.0.0.1:8674",  -- override to use external server
 	},
@@ -81,14 +81,54 @@ function M.setup(opts)
 		if not M._voice or not M._voice:is_running() then
 			M.start()
 		end
-		if M._listening then
-			M._voice:stop_listening()
-			M._listening = false
-		else
-			M._voice:start_listening()
-			M._listening = true
+
+		-- Create float immediately if it doesn't exist yet
+		if not M._float then
+			M._float = Float:new({
+				width = M.config.ui.float_width,
+				position = M.config.ui.float_position,
+			})
 		end
-	end, { desc = "lazyspeak: push-to-talk" })
+		M._float:show()
+		M._float:set_state("ready")
+
+		local buf = vim.api.nvim_get_current_buf()
+
+		local function cleanup()
+			M._listening = false
+			if M._float then
+				M._float:hide()
+			end
+			pcall(vim.keymap.del, "n", "<Space>", { buffer = buf })
+			pcall(vim.keymap.del, "n", "<Esc>", { buffer = buf })
+		end
+
+		-- <Space> toggles recording on/off
+		vim.keymap.set("n", "<Space>", function()
+			if not M._voice or not M._voice:is_running() then
+				vim.notify("[lazyspeak] waiting for daemon to start...", vim.log.levels.INFO)
+				return
+			end
+			if M._listening then
+				M._voice:stop_listening()
+				M._listening = false
+			else
+				M._voice:start_listening()
+				M._listening = true
+			end
+		end, { buffer = buf, desc = "lazyspeak: toggle recording" })
+
+		-- <Esc> cancels and closes
+		vim.keymap.set("n", "<Esc>", function()
+			if M._listening and M._voice then
+				M._voice:cancel()
+			end
+			cleanup()
+		end, { buffer = buf, desc = "lazyspeak: close" })
+
+		-- Auto-cleanup after dispatch completes
+		M._session_cleanup = cleanup
+	end, { desc = "lazyspeak: open" })
 
 	vim.keymap.set("n", keys.cancel, function()
 		if M._voice and M._voice:is_running() then
@@ -121,16 +161,29 @@ function M.start()
 		return
 	end
 
+	local function update_float(state)
+		vim.schedule(function()
+			if M._float then
+				M._float:set_state(state)
+			end
+		end)
+	end
+
 	-- If using the built-in server (no custom server_url), auto-start llama-server
 	if not M.config.model.server_url then
+		update_float("starting_server")
 		install.start_llama_server({
 			port = M.config.model.server_port,
-			model_path = M.config.model.path,
+			hf_repo = M.config.model.hf_repo,
 		}, function()
+			update_float("starting_daemon")
 			M._start_pipeline()
+			update_float("ready")
 		end)
 	else
+		update_float("starting_daemon")
 		M._start_pipeline()
+		update_float("ready")
 	end
 end
 
@@ -156,11 +209,19 @@ function M._start_pipeline()
 				M._state = "idle"
 				ui.set_state("idle")
 				M._float:set_state("idle")
+				if M._session_cleanup then
+					M._session_cleanup()
+					M._session_cleanup = nil
+				end
 			elseif event.type == "error" then
 				M._state = "idle"
 				ui.set_state("idle")
 				M._float:set_state("idle")
 				vim.notify("[lazyspeak] error: " .. (event.error or "unknown"), vim.log.levels.ERROR)
+				if M._session_cleanup then
+					M._session_cleanup()
+					M._session_cleanup = nil
+				end
 			end
 		end)
 	end)

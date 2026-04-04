@@ -1,0 +1,36 @@
+[output]
+dir = "./showcase"
+
+[[output.formats]]
+output_type = "png"
+
+[[output.formats]]
+output_type = "gif"
+
+[font]
+family = "Iosevka Nerd Font Mono"
+
+[[scenes]]
+type = "terminal"
+name = "lazyspeak-demo"
+theme = "dracula"
+cols = 100
+rows = 35
+
+[scenes.intro]
+text = "lazyspeak.nvim\nVoice-driven coding for Neovim"
+duration = 2000
+center = true
+
+[[scenes.interactions]]
+type = "type"
+text = "lazyspeak --help"
+speed = 50
+
+[[scenes.interactions]]
+type = "key"
+key = "enter"
+
+[[scenes.interactions]]
+type = "wait"
+duration = 3000
