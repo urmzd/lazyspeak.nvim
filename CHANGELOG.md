@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0 (2026-04-04)
+
+### Features
+
+- interactive push-to-talk UI, auto model download, and startup improvements (#2) ([073e9f8](https://github.com/urmzd/lazyspeak.nvim/commit/073e9f84922cc2aa6724fb23329e282221514d73))
+
+[Full Changelog](https://github.com/urmzd/lazyspeak.nvim/compare/v0.1.2...v0.2.0)
+
+
 ## 0.1.2 (2026-04-03)
 
 ### Bug Fixes
