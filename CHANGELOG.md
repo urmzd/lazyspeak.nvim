@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 (2026-04-05)
+
+### Features
+
+- add teasr demo config (#3) ([6563cf2](https://github.com/urmzd/lazyspeak.nvim/commit/6563cf227ebceba6e77d0bcd648cd8c0711ce4f7))
+
+[Full Changelog](https://github.com/urmzd/lazyspeak.nvim/compare/v0.2.0...v0.3.0)
+
+
 ## 0.2.0 (2026-04-04)
 
 ### Features
