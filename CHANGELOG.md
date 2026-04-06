@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.0 (2026-04-06)
+
+### Features
+
+- **pipeline**: create modular streamsafe pipeline architecture ([d637c18](https://github.com/urmzd/lazyspeak.nvim/commit/d637c185fbc772a06ba77f1639c1d120d0dac249))
+
+### Refactoring
+
+- **main**: migrate to async/tokio with pipeline pattern ([8831593](https://github.com/urmzd/lazyspeak.nvim/commit/8831593acb97f3eb9f91372a05f140b2ddc4a575))
+
+### Miscellaneous
+
+- **deps**: add streamsafe and tokio-util dependencies ([442cd96](https://github.com/urmzd/lazyspeak.nvim/commit/442cd96cd23b535fce4a199d8d595a60e4287a42))
+- add linguist overrides to fix language stats ([3f2b0f3](https://github.com/urmzd/lazyspeak.nvim/commit/3f2b0f38c7f36f1e921b6fa3c27842ccf1bb758f))
+
+[Full Changelog](https://github.com/urmzd/lazyspeak.nvim/compare/v0.3.0...v0.4.0)
+
+
 ## 0.3.0 (2026-04-05)
 
 ### Features
