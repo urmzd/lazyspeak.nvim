@@ -149,8 +149,7 @@ Every adapter implements `lazyspeak.Adapter`. The plugin never talks protocol-sp
 
 #### 2. `crates/` — Rust daemon binary (~5 MB)
 
-- **lazyspeak-core**: library crate — audio capture (cpal), energy-based VAD, STT HTTP client, JSON lines protocol
-- **lazyspeak**: binary crate — event loop wiring audio → STT → protocol over stdin/stdout
+- **lazyspeak**: single crate (lib + binary) — audio capture (cpal), energy-based VAD, STT HTTP client, JSON lines protocol, event loop wiring audio → STT → protocol over stdin/stdout
 - Single static binary, no runtime dependencies
 
 #### 3. Voxtral Mini 3B — local inference
@@ -470,15 +469,14 @@ lazyspeak.nvim/
 ├── Cargo.toml                -- workspace root
 ├── Justfile                  -- dev tasks
 ├── crates/
-│   ├── lazyspeak-core/       -- library: audio, protocol, transcribe
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── audio.rs      -- cpal mic capture + energy VAD
-│   │       ├── protocol.rs   -- JSON lines Command/Event types
-│   │       └── transcribe.rs -- HTTP STT client (llama-server)
-│   └── lazyspeak/            -- binary: daemon entry point
+│   └── lazyspeak/            -- lib + binary
 │       └── src/
-│           └── main.rs       -- event loop wiring audio → STT → protocol
+│           ├── lib.rs        -- public modules: audio, protocol, transcribe, pipeline
+│           ├── main.rs       -- daemon entry point, event loop
+│           ├── audio.rs      -- cpal mic capture + energy VAD
+│           ├── protocol.rs   -- JSON lines Command/Event types
+│           ├── transcribe/   -- STT backends
+│           └── pipeline/     -- streamsafe pipeline stages
 ├── lua/
 │   └── lazyspeak/
 │       ├── init.lua          -- setup(), public API, keybindings
