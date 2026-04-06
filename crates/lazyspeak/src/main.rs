@@ -1,18 +1,16 @@
-use anyhow::Result;
-use lazyspeak_core::audio::{AudioCapture, AudioConfig, AudioEvent};
-use lazyspeak_core::protocol::{Command, Event, State, parse_command, serialize_event};
-use lazyspeak_core::transcribe::SpeechTranscriber;
-use std::io::{self, BufRead, Write};
-use std::sync::mpsc;
-use std::thread;
+mod pipeline;
 
-fn emit(event: &Event) -> Result<()> {
-    let line = serialize_event(event)?;
-    let mut stdout = io::stdout().lock();
-    writeln!(stdout, "{line}")?;
-    stdout.flush()?;
-    Ok(())
-}
+use std::io::{self, BufRead, Write};
+use std::sync::Arc;
+
+use anyhow::Result;
+use lazyspeak_core::audio::{AudioCapture, AudioConfig};
+use lazyspeak_core::protocol::{Event, State, parse_command, serialize_event};
+use lazyspeak_core::transcribe::SpeechTranscriber;
+use streamsafe::PipelineBuilder;
+use tokio_util::sync::CancellationToken;
+
+use pipeline::{AudioSource, EventSink, TranscribeTransform, VadFilter};
 
 /// Build the HTTP transcription backend from environment variables.
 ///
@@ -27,18 +25,93 @@ fn build_transcriber() -> Result<Box<dyn SpeechTranscriber>> {
     Ok(Box::new(transcriber))
 }
 
-fn main() -> Result<()> {
+/// Drains the event channel and writes JSON lines to stdout.
+async fn stdout_writer(mut event_rx: tokio::sync::mpsc::Receiver<Event>) {
+    let result: Result<()> = tokio::task::spawn_blocking(move || {
+        let mut stdout = io::stdout().lock();
+        while let Some(event) = event_rx.blocking_recv() {
+            if let Ok(line) = serialize_event(&event) {
+                if writeln!(stdout, "{line}").is_err() {
+                    break;
+                }
+                if stdout.flush().is_err() {
+                    break;
+                }
+            }
+        }
+        Ok(())
+    })
+    .await
+    .unwrap_or(Ok(()));
+
+    if let Err(e) = result {
+        tracing::error!("stdout writer error: {e}");
+    }
+}
+
+/// Reads stdin commands and controls audio capture + cancellation.
+async fn stdin_command_loop(
+    audio: Arc<AudioCapture>,
+    event_tx: tokio::sync::mpsc::Sender<Event>,
+    token: CancellationToken,
+) {
+    let _ = tokio::task::spawn_blocking(move || {
+        let stdin = io::stdin().lock();
+        for line in stdin.lines() {
+            let line = match line {
+                Ok(l) => l,
+                Err(_) => break,
+            };
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            match parse_command(&line) {
+                Ok(cmd) => match cmd {
+                    lazyspeak_core::protocol::Command::StartListening => {
+                        audio.set_listening(true);
+                        let _ = event_tx.blocking_send(Event::Status {
+                            state: State::Listening,
+                        });
+                    }
+                    lazyspeak_core::protocol::Command::StopListening
+                    | lazyspeak_core::protocol::Command::Cancel => {
+                        audio.set_listening(false);
+                        let _ = event_tx.blocking_send(Event::Status { state: State::Idle });
+                    }
+                    lazyspeak_core::protocol::Command::Shutdown => {
+                        token.cancel();
+                        break;
+                    }
+                },
+                Err(e) => {
+                    let _ = event_tx.blocking_send(Event::Error {
+                        message: format!("invalid command: {e}"),
+                    });
+                }
+            }
+        }
+    })
+    .await;
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_writer(io::stderr)
         .with_env_filter("lazyspeak=debug")
         .init();
 
-    emit(&Event::Status { state: State::Idle })?;
+    // Unified event channel — all events flow through here to stdout.
+    let (event_tx, event_rx) = tokio::sync::mpsc::channel::<Event>(64);
 
-    let transcriber = build_transcriber()?;
+    // Initial status.
+    let _ = event_tx.send(Event::Status { state: State::Idle }).await;
 
-    let backend_name = transcriber.name();
+    // Transcription backend.
+    let transcriber: Arc<dyn SpeechTranscriber> = Arc::from(build_transcriber()?);
     let stt_available = transcriber.is_ready();
+    let backend_name = transcriber.name().to_string();
     if stt_available {
         tracing::info!("STT backend ready ({backend_name})");
     } else {
@@ -47,87 +120,41 @@ fn main() -> Result<()> {
         );
     }
 
-    let audio = AudioCapture::new(AudioConfig::default());
+    // Audio capture.
+    let audio = Arc::new(AudioCapture::new(AudioConfig::default()));
     let device_sample_rate = audio.sample_rate();
-    let audio_rx = audio.start()?;
+    let sync_rx = audio.start()?;
     audio.set_listening(false);
 
-    // Audio event handler thread
-    let (done_tx, done_rx) = mpsc::channel::<()>();
-    thread::spawn(move || {
-        for event in audio_rx {
-            let result = match event {
-                AudioEvent::Vad(speaking) => emit(&Event::Vad { speaking }),
-                AudioEvent::Utterance {
-                    samples,
-                    duration_ms,
-                } => {
-                    let _ = emit(&Event::Status {
-                        state: State::Transcribing,
-                    });
+    let token = CancellationToken::new();
 
-                    let text = if stt_available {
-                        match transcriber.transcribe(&samples, device_sample_rate) {
-                            Ok(r) => r.text,
-                            Err(e) => {
-                                let _ = emit(&Event::Error {
-                                    message: format!("transcription failed: {e}"),
-                                });
-                                format!("[transcription error: {e}]")
-                            }
-                        }
-                    } else {
-                        format!("[audio {duration_ms}ms — STT backend not available]")
-                    };
+    // Spawn stdout writer.
+    let writer_handle = tokio::spawn(stdout_writer(event_rx));
 
-                    let _ = emit(&Event::Transcript { text, duration_ms });
-                    emit(&Event::Status { state: State::Idle })
-                }
-                AudioEvent::Error(msg) => emit(&Event::Error { message: msg }),
-            };
-            if result.is_err() {
-                break;
-            }
-        }
-        let _ = done_tx.send(());
-    });
+    // Spawn stdin command handler.
+    let stdin_handle = tokio::spawn(stdin_command_loop(
+        audio.clone(),
+        event_tx.clone(),
+        token.clone(),
+    ));
 
-    // Command loop on stdin
-    let stdin = io::stdin().lock();
-    for line in stdin.lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
+    // Build and run the pipeline.
+    let pipeline_result = PipelineBuilder::from(AudioSource::new(sync_rx))
+        .filter_pipe(VadFilter::new(event_tx.clone()))
+        .pipe(TranscribeTransform::new(
+            transcriber,
+            device_sample_rate,
+            stt_available,
+            event_tx.clone(),
+        ))
+        .into(EventSink::new(event_tx))
+        .run_with_token(token)
+        .await;
 
-        match parse_command(&line) {
-            Ok(cmd) => match cmd {
-                Command::StartListening => {
-                    audio.set_listening(true);
-                    emit(&Event::Status {
-                        state: State::Listening,
-                    })?;
-                }
-                Command::StopListening => {
-                    audio.set_listening(false);
-                    emit(&Event::Status { state: State::Idle })?;
-                }
-                Command::Cancel => {
-                    audio.set_listening(false);
-                    emit(&Event::Status { state: State::Idle })?;
-                }
-                Command::Shutdown => break,
-            },
-            Err(e) => {
-                emit(&Event::Error {
-                    message: format!("invalid command: {e}"),
-                })?;
-            }
-        }
-    }
-
+    // Cleanup.
     audio.set_listening(false);
-    let _ = done_rx.recv_timeout(std::time::Duration::from_secs(1));
+    let _ = stdin_handle.await;
+    let _ = writer_handle.await;
 
-    Ok(())
+    pipeline_result.map_err(|e| anyhow::anyhow!("{e}"))
 }
