@@ -1,4 +1,4 @@
-use lazyspeak_core::audio::AudioEvent;
+use crate::audio::AudioEvent;
 use streamsafe::{Result, Source};
 
 /// Bridges the synchronous `std::sync::mpsc::Receiver<AudioEvent>` from cpal

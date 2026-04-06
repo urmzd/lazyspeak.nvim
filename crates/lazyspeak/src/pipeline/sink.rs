@@ -1,4 +1,4 @@
-use lazyspeak_core::protocol::{Event, State};
+use crate::protocol::{Event, State};
 use streamsafe::{Result, Sink, StreamSafeError};
 
 /// Terminal pipeline stage that sends transcript events to the unified

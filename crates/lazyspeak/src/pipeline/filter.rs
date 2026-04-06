@@ -1,5 +1,5 @@
-use lazyspeak_core::audio::AudioEvent;
-use lazyspeak_core::protocol::{Event, State};
+use crate::audio::AudioEvent;
+use crate::protocol::{Event, State};
 use streamsafe::{FilterTransform, Result};
 
 /// Data extracted from an utterance, passed downstream for transcription.

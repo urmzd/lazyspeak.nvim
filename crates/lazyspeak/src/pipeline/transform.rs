@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use lazyspeak_core::protocol::Event;
-use lazyspeak_core::transcribe::SpeechTranscriber;
+use crate::protocol::Event;
+use crate::transcribe::SpeechTranscriber;
 use streamsafe::{Result, StreamSafeError, Transform};
 
 use super::filter::UtteranceData;
