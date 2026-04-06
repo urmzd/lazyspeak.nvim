@@ -1,22 +1,19 @@
-mod pipeline;
-
 use std::io::{self, BufRead, Write};
 use std::sync::Arc;
 
 use anyhow::Result;
-use lazyspeak_core::audio::{AudioCapture, AudioConfig};
-use lazyspeak_core::protocol::{Event, State, parse_command, serialize_event};
-use lazyspeak_core::transcribe::SpeechTranscriber;
+use lazyspeak::audio::{AudioCapture, AudioConfig};
+use lazyspeak::pipeline::{AudioSource, EventSink, TranscribeTransform, VadFilter};
+use lazyspeak::protocol::{Event, State, parse_command, serialize_event};
+use lazyspeak::transcribe::SpeechTranscriber;
 use streamsafe::PipelineBuilder;
 use tokio_util::sync::CancellationToken;
-
-use pipeline::{AudioSource, EventSink, TranscribeTransform, VadFilter};
 
 /// Build the HTTP transcription backend from environment variables.
 ///
 /// LAZYSPEAK_STT_URL — server URL (default http://127.0.0.1:8674)
 fn build_transcriber() -> Result<Box<dyn SpeechTranscriber>> {
-    use lazyspeak_core::transcribe::http::{
+    use lazyspeak::transcribe::http::{
         DEFAULT_SERVER_URL, HttpTranscriber, HttpTranscriberConfig,
     };
     let server_url =
@@ -68,18 +65,18 @@ async fn stdin_command_loop(
 
             match parse_command(&line) {
                 Ok(cmd) => match cmd {
-                    lazyspeak_core::protocol::Command::StartListening => {
+                    lazyspeak::protocol::Command::StartListening => {
                         audio.set_listening(true);
                         let _ = event_tx.blocking_send(Event::Status {
                             state: State::Listening,
                         });
                     }
-                    lazyspeak_core::protocol::Command::StopListening
-                    | lazyspeak_core::protocol::Command::Cancel => {
+                    lazyspeak::protocol::Command::StopListening
+                    | lazyspeak::protocol::Command::Cancel => {
                         audio.set_listening(false);
                         let _ = event_tx.blocking_send(Event::Status { state: State::Idle });
                     }
-                    lazyspeak_core::protocol::Command::Shutdown => {
+                    lazyspeak::protocol::Command::Shutdown => {
                         token.cancel();
                         break;
                     }
