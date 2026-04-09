@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.4.1 (2026-04-09)
+
+### Documentation
+
+- add LICENSE and README to sub-crate for publishing compliance ([336eeff](https://github.com/urmzd/lazyspeak.nvim/commit/336eeff41f27064dd81c6bdd83420988534f6d75))
+- **spec**: update architecture documentation ([93c4c56](https://github.com/urmzd/lazyspeak.nvim/commit/93c4c56fbd6f93b9b46aaf9f047ee7c594b99556))
+
+### Refactoring
+
+- **main**: update entry point after crate consolidation ([9a92630](https://github.com/urmzd/lazyspeak.nvim/commit/9a926307e97787fa9ca91387aed0531317805033))
+- **lib**: move core library into main crate ([5313974](https://github.com/urmzd/lazyspeak.nvim/commit/531397450ca8f16770681a37d2a55563e82bc569))
+- **workspace**: consolidate lazyspeak-core into main crate ([ca0f76d](https://github.com/urmzd/lazyspeak.nvim/commit/ca0f76d073e7c42adb6143f79f475e06c47c8477))
+
+### Miscellaneous
+
+- fix cargo fmt import formatting ([da70048](https://github.com/urmzd/lazyspeak.nvim/commit/da7004822fe3941e8e59177a9d6151fba6e02de7))
+- **lazyspeak-core**: remove library module ([dd1bd13](https://github.com/urmzd/lazyspeak.nvim/commit/dd1bd13b5b988ed06050b76652685f3062d68a66))
+- **release**: remove lazyspeak-core publishing step ([bcf406e](https://github.com/urmzd/lazyspeak.nvim/commit/bcf406e6d7a127f9576af0b4f93b4bf27df95fe4))
+
+[Full Changelog](https://github.com/urmzd/lazyspeak.nvim/compare/v0.4.0...v0.4.1)
+
+
 ## 0.4.0 (2026-04-06)
 
 ### Features
