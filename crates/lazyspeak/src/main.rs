@@ -13,9 +13,7 @@ use tokio_util::sync::CancellationToken;
 ///
 /// LAZYSPEAK_STT_URL — server URL (default http://127.0.0.1:8674)
 fn build_transcriber() -> Result<Box<dyn SpeechTranscriber>> {
-    use lazyspeak::transcribe::http::{
-        DEFAULT_SERVER_URL, HttpTranscriber, HttpTranscriberConfig,
-    };
+    use lazyspeak::transcribe::http::{DEFAULT_SERVER_URL, HttpTranscriber, HttpTranscriberConfig};
     let server_url =
         std::env::var("LAZYSPEAK_STT_URL").unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string());
     let transcriber = HttpTranscriber::new(HttpTranscriberConfig { server_url });
