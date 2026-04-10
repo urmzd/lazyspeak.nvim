@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.2 (2026-04-10)
+
+### Bug Fixes
+
+- update streamsafe to 0.2 and commit Cargo.lock ([e7b1839](https://github.com/urmzd/lazyspeak.nvim/commit/e7b183911e2e0d7127b490ab08caf6cd0bd21a8e))
+- **ci**: remove --allow-dirty from cargo publish ([e14d7ae](https://github.com/urmzd/lazyspeak.nvim/commit/e14d7aece987d201745b05fd945506ef15efbe1c))
+- add version to streamsafe dependency for crates.io publishing ([7ddb7f2](https://github.com/urmzd/lazyspeak.nvim/commit/7ddb7f266bf0e4ea3c2fd4f878c35187e029ce8b))
+
+### Documentation
+
+- add project roadmap with ecosystem research ([a9830c9](https://github.com/urmzd/lazyspeak.nvim/commit/a9830c9c0b1ec76b28f4b0f7f7f3e646084dbaa8))
+
+[Full Changelog](https://github.com/urmzd/lazyspeak.nvim/compare/v0.4.1...v0.4.2)
+
+
 ## 0.4.1 (2026-04-09)
 
 ### Documentation
