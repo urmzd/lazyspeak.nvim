@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.3 (2026-04-16)
+
+### Bug Fixes
+
+- **ci**: migrate sr v4 to v7 for artifact and input support (#5) ([a7ac35e](https://github.com/urmzd/lazyspeak.nvim/commit/a7ac35ed4bf5ffabdda854344a40244a62577ea4))
+
+### Misc
+
+- migrate sr config and action to v4 ([bd95646](https://github.com/urmzd/lazyspeak.nvim/commit/bd956464d5eacde5c95af25ab159b093c6843b90))
+
+[Full Changelog](https://github.com/urmzd/lazyspeak.nvim/compare/v0.4.2...v0.4.3)
+
+
 ## 0.4.2 (2026-04-10)
 
 ### Bug Fixes
