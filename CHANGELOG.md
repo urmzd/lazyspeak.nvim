@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.4 (2026-04-19)
+
+### Refactoring
+
+- move cargo publish into sr hooks.post_release ([6b5a0f6](https://github.com/urmzd/lazyspeak.nvim/commit/6b5a0f6bb553d8bd70972beab870308f71b1e668))
+
+[Full Changelog](https://github.com/urmzd/lazyspeak.nvim/compare/v0.4.3...v0.4.4)
+
+
 ## 0.4.3 (2026-04-16)
 
 ### Bug Fixes
