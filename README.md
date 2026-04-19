@@ -1,9 +1,24 @@
-# lazyspeak.nvim
-
-Voice-driven coding for Neovim. Speak your intent, edits appear in your editor.
+<p align="center">
+  <h1 align="center">lazyspeak.nvim</h1>
+  <p align="center">
+    Voice-driven coding for Neovim. Speak your intent, edits appear in your editor.
+    <br /><br />
+    <a href="#installation">Install</a>
+    &middot;
+    <a href="https://github.com/urmzd/lazyspeak.nvim/issues">Report Bug</a>
+    &middot;
+    <a href="#agent-setup">Agents</a>
+  </p>
+</p>
 
 <p align="center">
-  <img src="showcase/lazyspeak-demo.gif" alt="lazyspeak.nvim demo" width="600">
+  <a href="https://github.com/urmzd/lazyspeak.nvim/actions/workflows/ci.yml"><img src="https://github.com/urmzd/lazyspeak.nvim/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  &nbsp;
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/urmzd/lazyspeak.nvim" alt="License"></a>
+</p>
+
+<p align="center">
+  <img src="showcase/lazyspeak-demo.gif" alt="lazyspeak.nvim demo" width="80%">
 </p>
 
 ```
