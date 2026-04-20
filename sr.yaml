@@ -1,4 +1,4 @@
-# sr v7 configuration
+# sr configuration
 # Reference: https://github.com/urmzd/sr#configuration
 
 git:
@@ -60,6 +60,5 @@ packages:
   - path: .
     version_files:
       - Cargo.toml
-    hooks:
-      post_release:
-        - cargo publish -p lazyspeak
+    publish:
+      type: cargo
