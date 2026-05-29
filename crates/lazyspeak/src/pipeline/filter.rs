@@ -6,6 +6,8 @@ use streamsafe::{FilterTransform, Result};
 pub struct UtteranceData {
     pub samples: Vec<f32>,
     pub duration_ms: u64,
+    /// False for interim (partial) snapshots, true for the finalized utterance.
+    pub is_final: bool,
 }
 
 /// Filters the audio event stream: emits VAD/error events as side-effects
@@ -30,6 +32,14 @@ impl FilterTransform for VadFilter {
                 let _ = self.event_tx.send(Event::Vad { speaking }).await;
                 Ok(None)
             }
+            AudioEvent::Partial {
+                samples,
+                duration_ms,
+            } => Ok(Some(UtteranceData {
+                samples,
+                duration_ms,
+                is_final: false,
+            })),
             AudioEvent::Utterance {
                 samples,
                 duration_ms,
@@ -43,6 +53,7 @@ impl FilterTransform for VadFilter {
                 Ok(Some(UtteranceData {
                     samples,
                     duration_ms,
+                    is_final: true,
                 }))
             }
             AudioEvent::Error(msg) => {

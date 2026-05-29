@@ -17,14 +17,19 @@ impl Sink for EventSink {
     type Input = Event;
 
     async fn consume(&mut self, input: Event) -> Result<()> {
+        // Interim partials don't end the turn — emit them without the trailing
+        // Idle status so the UI stays in its listening/transcribing state.
+        let is_partial = matches!(input, Event::Partial { .. });
         self.event_tx
             .send(input)
             .await
             .map_err(|_| StreamSafeError::ChannelClosed)?;
-        self.event_tx
-            .send(Event::Status { state: State::Idle })
-            .await
-            .map_err(|_| StreamSafeError::ChannelClosed)?;
+        if !is_partial {
+            self.event_tx
+                .send(Event::Status { state: State::Idle })
+                .await
+                .map_err(|_| StreamSafeError::ChannelClosed)?;
+        }
         Ok(())
     }
 }
