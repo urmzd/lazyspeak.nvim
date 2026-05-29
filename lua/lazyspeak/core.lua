@@ -4,10 +4,13 @@
 ---@field text string
 
 ---@class lazyspeak.Event
----@field type "message" | "tool_call" | "diff" | "permission" | "done" | "error"
+---@field type "message" | "thought" | "tool_call" | "plan" | "diff" | "permission" | "done" | "error"
 ---@field session_id string
----@field text? string
----@field tool_name? string
+---@field text? string             -- streamed text (message/thought), or JSON (tool_call/plan)
+---@field tool_name? string        -- tool_call: human title or kind
+---@field tool_call_id? string     -- tool_call: ACP toolCallId
+---@field status? string           -- tool_call: pending | in_progress | completed | failed
+---@field stop_reason? string      -- done: end_turn | max_tokens | cancelled | refusal
 ---@field diff? lazyspeak.Diff
 ---@field permission? lazyspeak.Permission
 ---@field error? string
@@ -17,10 +20,19 @@
 ---@field old_content string
 ---@field new_content string
 
+--- A permission prompt from the agent. The UI presents `options` and calls
+--- `respond(optionId)` with the chosen option's id, or `respond(nil)` to cancel.
+---@class lazyspeak.PermissionOption
+---@field optionId string
+---@field name string
+---@field kind "allow_once" | "allow_always" | "reject_once" | "reject_always"
+
 ---@class lazyspeak.Permission
 ---@field id string
----@field description string
----@field callback fun(approved: boolean)
+---@field title string
+---@field kind? string
+---@field options lazyspeak.PermissionOption[]
+---@field respond fun(option_id: string?)
 
 ---@class lazyspeak.Snapshot
 ---@field id string

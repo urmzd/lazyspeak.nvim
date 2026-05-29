@@ -34,6 +34,8 @@ function Voice:_handle_line(line)
 	local event_type = data.type
 	if event_type == "transcript" and self.callbacks.transcript then
 		self.callbacks.transcript(data.text, data.duration_ms)
+	elseif event_type == "partial" and self.callbacks.partial then
+		self.callbacks.partial(data.text)
 	elseif event_type == "status" and self.callbacks.status then
 		self.callbacks.status(data.state)
 	elseif event_type == "vad" and self.callbacks.vad then
@@ -115,6 +117,11 @@ end
 ---@param callback fun(text: string, duration_ms: number)
 function Voice:on_transcript(callback)
 	self.callbacks.transcript = callback
+end
+
+---@param callback fun(text: string)
+function Voice:on_partial(callback)
+	self.callbacks.partial = callback
 end
 
 ---@param callback fun(state: string)
