@@ -23,7 +23,7 @@
 
 ```
 Mic -> Voxtral Mini 3B (local STT) -> transcript -> adapter -> agent -> Neovim
-         ~3.2 GB GGUF, Apache 2.0      ACP or Claude Code IDE protocol
+         ~3.2 GB GGUF, Apache 2.0      Agent Client Protocol (ACP)
 ```
 
 No cloud STT dependency. No TTS. You speak, it codes.
@@ -35,7 +35,8 @@ No cloud STT dependency. No TTS. You speak, it codes.
 | Neovim >= 0.10 | Editor | [neovim.io](https://neovim.io) |
 | Rust toolchain | Build daemon binary | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
 | llama.cpp | Local STT inference | `brew install llama.cpp` |
-| An ACP agent **or** Claude Code | Coding intelligence | See [Agent Setup](#agent-setup) |
+| Node.js >= 18 | Run the Claude Code ACP bridge (`npx`) | [nodejs.org](https://nodejs.org) |
+| An [ACP](https://agentclientprotocol.com) agent (Claude Code, Gemini, Goose, …) | Coding intelligence | See [Agent Setup](#agent-setup) |
 
 Optional: [just](https://github.com/casey/just) for convenient dev commands.
 
@@ -92,11 +93,15 @@ Open Neovim and run:
 
 ## Agent Setup
 
-lazyspeak.nvim needs a coding agent to dispatch transcripts to. Pick one:
+lazyspeak.nvim speaks the [Agent Client Protocol (ACP)](https://agentclientprotocol.com)
+to any compatible agent over stdio. Agent responses, tool calls, file edits, and
+permission prompts all stream back into Neovim live. Pick an agent:
 
 ### Claude Code (default)
 
-Install [Claude Code](https://docs.anthropic.com/en/docs/claude-code), then:
+The `claudecode` adapter launches Anthropic's official ACP bridge,
+[`@agentclientprotocol/claude-agent-acp`](https://www.npmjs.com/package/@agentclientprotocol/claude-agent-acp)
+(formerly `@zed-industries/claude-code-acp`), via `npx` — no global install required:
 
 ```lua
 require("lazyspeak").setup({
@@ -104,19 +109,24 @@ require("lazyspeak").setup({
 })
 ```
 
-The adapter auto-discovers a running Claude Code instance or spawns a new CLI process.
+**Authentication:** the bridge inherits your environment, so either export
+`ANTHROPIC_API_KEY`, or run `claude login` once (its cached token is reused). No
+in-editor login flow is needed.
 
-### ACP-compatible agents
+> Claude has no native audio input, so lazyspeak always transcribes locally
+> (Voxtral) and sends **text** to the agent.
 
-Any agent that speaks the [Agent Communication Protocol](https://github.com/anthropics/agent-protocol) works:
+### Other ACP agents
+
+Point the `acp` adapter at any ACP agent's launch command:
 
 ```lua
 require("lazyspeak").setup({
   agent = {
     adapter = "acp",
-    cmd = { "gemini", "--acp" },           -- Gemini CLI
-    -- cmd = { "goose", "session", "--acp" }, -- Goose
-    -- cmd = { "codex", "--acp" },            -- Codex
+    cmd = { "gemini", "--acp" },  -- Gemini CLI (natively multimodal)
+    -- cmd = { "goose", "acp" },  -- Goose
+    -- cmd = { "claude-agent-acp" }, -- Claude bridge installed globally
   },
 })
 ```
@@ -175,8 +185,8 @@ Full configuration with defaults:
 require("lazyspeak").setup({
   agent = {
     adapter = "claudecode",  -- "claudecode" | "acp"
-    -- cmd = { "gemini", "--acp" },  -- for ACP adapter
-    -- auto_approve = false,
+    -- cmd = { "gemini", "--acp" },  -- override launch command (acp adapter)
+    auto_approve = false,    -- false = prompt on every permission; true = auto-allow
   },
 
   model = {
@@ -188,9 +198,10 @@ require("lazyspeak").setup({
   audio = {
     sample_rate = 16000,
     channels = 1,
-    vad_threshold = 0.5,
-    silence_duration_ms = 1000,
+    vad_threshold = 0.01,        -- RMS energy threshold for speech
+    silence_duration_ms = 400,   -- trailing silence before finalizing (latency knob)
     max_duration_ms = 30000,
+    partial_interval_ms = 700,   -- interim transcript cadence while speaking (0 disables)
   },
 
   ui = {
@@ -250,6 +261,12 @@ just nvim-dev       # Launch Neovim with plugin loaded
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `LAZYSPEAK_STT_URL` | `http://127.0.0.1:8674` | llama-server URL |
+| `LAZYSPEAK_VAD_THRESHOLD` | `0.01` | RMS energy threshold for speech detection |
+| `LAZYSPEAK_SILENCE_MS` | `400` | Trailing silence before an utterance is finalized |
+| `LAZYSPEAK_MAX_MS` | `30000` | Max utterance length before forced finalization |
+| `LAZYSPEAK_PARTIAL_MS` | `700` | Interim transcript cadence while speaking (0 disables) |
+
+These are set automatically from your `audio` config; override them directly only when running the daemon standalone.
 
 ## License
 
