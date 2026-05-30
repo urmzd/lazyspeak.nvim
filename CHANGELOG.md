@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.0 (2026-05-30)
+
+### Features
+
+- realtime voice over ACP with Claude Code bridge (#6) ([bf956ce](https://github.com/urmzd/lazyspeak.nvim/commit/bf956ce3a42c7510dc6a29012301906eaa12fc8e))
+
+### Misc
+
+- **ci**: bump sr to v8, convert post_release hook to typed cargo publisher ([118e2e0](https://github.com/urmzd/lazyspeak.nvim/commit/118e2e0e54432fd3bb3865683f9dd8804df94079))
+- **ci**: remove unused force input from release workflow ([eda092b](https://github.com/urmzd/lazyspeak.nvim/commit/eda092b22b4ea536cb6f164f72911021198e652f))
+- **community**: add GitHub community-health files ([87e2f76](https://github.com/urmzd/lazyspeak.nvim/commit/87e2f76a00c8dd87826beb002401d7db36222207))
+- **fix**: standardize README header ([1ab8fff](https://github.com/urmzd/lazyspeak.nvim/commit/1ab8fff9b6ca5f930cf08afdd01564a194d591a5))
+
+[Full Changelog](https://github.com/urmzd/lazyspeak.nvim/compare/v0.4.4...v0.5.0)
+
+
 ## 0.4.4 (2026-04-19)
 
 ### Refactoring
