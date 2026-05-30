@@ -111,10 +111,10 @@ Every adapter implements `lazyspeak.Adapter`. The plugin never talks protocol-sp
 
 #### 1. `lua/lazyspeak/` — Neovim plugin (Lua)
 
-**voice.lua** — Manages the Python STT daemon
+**voice.lua** — Manages the Rust STT daemon
 - Spawns/stops the daemon process
 - Sends commands (start/stop listening, cancel)
-- Receives transcripts via stdout JSON lines
+- Receives interim (`partial`) and final transcripts via stdout JSON lines
 
 **core.lua** — IR types and adapter dispatch
 - Defines `Request`, `Event`, `Diff`, `Permission` types
@@ -127,12 +127,12 @@ Every adapter implements `lazyspeak.Adapter`. The plugin never talks protocol-sp
 - Translates ACP `session/update`, `fs/*`, `terminal/*` → IR `Event`
 - Handles capability negotiation during `initialize`
 
-**adapters/claudecode.lua** — Claude Code IDE protocol adapter
-- Discovers Claude Code via `~/.claude/ide/*.lock` files
-- Connects over WebSocket with auth token
-- Translates IR `Request` → Claude Code stdin prompt or MCP notification
-- Translates MCP tool calls (`openDiff`, `getDiagnostics`) → IR `Event`
-- Can also spawn Claude Code CLI and pipe transcripts as user input
+**adapters/claudecode.lua** — Claude Code preset over the ACP adapter
+- Thin wrapper that defaults `agent.cmd` to the official Claude ACP bridge
+  (`npx -y @agentclientprotocol/claude-agent-acp`), then delegates to `acp.lua`
+- All protocol work (streaming, tool calls, permissions, fs edits) goes through
+  the single ACP code path — no bespoke Claude logic
+- Auth is inherited from the environment (`ANTHROPIC_API_KEY` or `claude login`)
 
 **snapshot.lua** — Pre-edit snapshots for undo/revert
 - Creates a snapshot before every agent edit lands
@@ -193,80 +193,107 @@ Matching is fuzzy (lowercased, trimmed, checked against patterns). Configurable 
 
 ### ACP Messages (what lazyspeak sends/receives)
 
+These follow the stable ACP v1 wire format (`protocolVersion: 1`). There is no
+`initialized` handshake — after the `initialize` response the client proceeds
+straight to `session/new`.
+
 **lazyspeak → Agent:**
 ```json
 {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
-  "protocolVersion": "0.11.4",
-  "clientInfo": {"name": "lazyspeak.nvim", "version": "0.1.0"},
+  "protocolVersion": 1,
   "clientCapabilities": {
     "fs": {"readTextFile": true, "writeTextFile": true},
-    "terminal": {"create": true, "output": true, "waitForExit": true, "kill": true},
-    "promptTypes": {"audio": false}
+    "terminal": false
   }
 }}
 
 {"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {
-  "cwd": "/path/to/project"
+  "cwd": "/path/to/project",
+  "mcpServers": []
 }}
 
 {"jsonrpc": "2.0", "id": 3, "method": "session/prompt", "params": {
   "sessionId": "abc-123",
-  "content": [{"type": "text", "text": "refactor the auth middleware to use JWT"}]
+  "prompt": [{"type": "text", "text": "refactor the auth middleware to use JWT"}]
 }}
 ```
 
-**Agent → lazyspeak (callbacks):**
+The `initialize` response carries `agentCapabilities.promptCapabilities`
+(`{image, audio, embeddedContext}`). Claude advertises no `audio`, so lazyspeak
+always sends a `text` content block; an audio-capable agent (e.g. Gemini) could
+receive an `audio` block instead.
+
+**Agent → lazyspeak (requests, expect a response):**
 ```json
 {"jsonrpc": "2.0", "id": 10, "method": "fs/read_text_file", "params": {
   "path": "/absolute/path/to/file.lua"
 }}
+// → result: {"content": "..."}
 
 {"jsonrpc": "2.0", "id": 11, "method": "fs/write_text_file", "params": {
   "path": "/absolute/path/to/file.lua",
   "content": "-- updated content"
 }}
+// → result: {}
 
 {"jsonrpc": "2.0", "id": 12, "method": "session/request_permission", "params": {
   "sessionId": "abc-123",
-  "toolCallId": "tc-1",
-  "description": "Write to src/auth.lua"
+  "toolCall": {"toolCallId": "tc-1", "title": "Write to src/auth.lua", "kind": "edit", "status": "pending"},
+  "options": [
+    {"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+    {"optionId": "reject", "name": "Reject", "kind": "reject_once"}
+  ]
 }}
+// → result: {"outcome": {"outcome": "selected", "optionId": "allow"}}
+//   (or {"outcome": {"outcome": "cancelled"}})
 ```
 
-**Agent → lazyspeak (notifications):**
+**Agent → lazyspeak (notifications, no response):**
 ```json
 {"jsonrpc": "2.0", "method": "session/update", "params": {
   "sessionId": "abc-123",
-  "type": "agent_message_chunk",
-  "text": "I'll refactor the auth middleware..."
+  "update": {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {"type": "text", "text": "I'll refactor the auth middleware..."}
+  }
 }}
 
 {"jsonrpc": "2.0", "method": "session/update", "params": {
   "sessionId": "abc-123",
-  "type": "tool_call",
-  "toolCallId": "tc-1",
-  "name": "write_file",
-  "arguments": "{\"path\": \"src/auth.lua\", ...}"
+  "update": {
+    "sessionUpdate": "tool_call",
+    "toolCallId": "tc-1",
+    "title": "Write file",
+    "kind": "edit",
+    "status": "pending",
+    "rawInput": {"path": "src/auth.lua"}
+  }
 }}
 ```
+
+The `session/prompt` response (not a notification) carries the turn's
+`stopReason` (`end_turn`, `max_tokens`, `cancelled`, `refusal`).
 
 ### Agent Configuration
 
 ```lua
 require("lazyspeak").setup({
   agent = {
-    -- Adapter: "acp" or "claudecode"
+    -- Adapter: "claudecode" (default) or "acp"
     adapter = "claudecode",
 
-    -- Claude Code adapter (default): connects to running Claude Code
-    -- No extra config needed — auto-discovers via ~/.claude/ide/*.lock
-    -- Or spawns a new Claude Code CLI if none is running.
+    -- claudecode: launches the official Claude ACP bridge via npx
+    --   (npx -y @agentclientprotocol/claude-agent-acp). Auth via
+    --   ANTHROPIC_API_KEY env or a prior `claude login`.
 
-    -- ACP adapter: spawns agent as subprocess
+    -- acp: spawn any ACP agent as a subprocess
     -- adapter = "acp",
     -- cmd = { "gemini", "--acp" },
-    -- cmd = { "goose", "session", "--acp" },
-    -- cmd = { "npx", "@zed-industries/claude-code-acp" },
+    -- cmd = { "goose", "acp" },
+    -- cmd = { "claude-agent-acp" },  -- bridge installed globally
+
+    -- false = prompt on every permission request; true = auto-allow
+    auto_approve = false,
   },
 })
 ```
@@ -336,10 +363,10 @@ require("lazyspeak").setup({
   -- Agent adapter
   agent = {
     adapter = "claudecode",  -- "claudecode" | "acp"
-    -- For claudecode: auto-discovers or spawns Claude Code CLI
-    -- For acp: spawns subprocess
+    -- claudecode: launches npx -y @agentclientprotocol/claude-agent-acp
+    -- acp: spawns the given command
     -- cmd = { "gemini", "--acp" },
-    -- auto_approve = false,
+    auto_approve = false,    -- true to auto-allow agent permission requests
   },
 
   -- STT model
@@ -354,9 +381,10 @@ require("lazyspeak").setup({
   audio = {
     sample_rate = 16000,
     channels = 1,
-    vad_threshold = 0.5,
-    silence_duration_ms = 1000,
+    vad_threshold = 0.01,
+    silence_duration_ms = 400,     -- trailing silence before finalizing (latency knob)
     max_duration_ms = 30000,
+    partial_interval_ms = 700,     -- interim transcript cadence (0 disables)
   },
 
   -- UI
@@ -388,7 +416,7 @@ require("lazyspeak").setup({
 
 ## Daemon Protocol
 
-Plugin ↔ Python daemon over stdin/stdout JSON lines.
+Plugin ↔ Rust daemon over stdin/stdout JSON lines.
 
 ### Plugin → Daemon (stdin)
 
@@ -407,6 +435,7 @@ Plugin ↔ Python daemon over stdin/stdout JSON lines.
 {"type": "status", "state": "idle"}
 {"type": "vad", "speaking": true}
 {"type": "vad", "speaking": false}
+{"type": "partial", "text": "refactor the auth"}
 {"type": "transcript", "text": "refactor the auth middleware to use JWT", "duration_ms": 3200}
 {"type": "error", "message": "mic not available"}
 ```
@@ -502,7 +531,7 @@ lazyspeak.nvim/
 - **Context injection** — automatically include current file, selection, and diagnostics with transcript
 - **Wake word** — optional activation without keybind
 - **Voice feedback** — optional TTS via Piper (MIT) or Voxtral TTS API
-- **Claude Code WebSocket** — upgrade claudecode adapter from CLI pipe to IDE protocol
+- **Native-audio fast path** — forward raw audio blocks to audio-capable ACP agents (e.g. Gemini), skipping local STT
 - **ACP agent registry** — browse/install agents from JetBrains ACP registry
 - **Multi-session** — multiple concurrent agent sessions
 - **Pre-built binaries** — GitHub releases with binaries for macOS/Linux (ARM + x86)

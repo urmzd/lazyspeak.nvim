@@ -9,7 +9,7 @@ local M = {}
 ---@class lazyspeak.Config
 ---@field agent { adapter: string, cmd?: string[], auto_approve?: boolean }
 ---@field model { path: string, server_port: number, server_url?: string }
----@field audio { sample_rate: number, channels: number, vad_threshold: number, silence_duration_ms: number, max_duration_ms: number }
+---@field audio { sample_rate: number, channels: number, vad_threshold: number, silence_duration_ms: number, max_duration_ms: number, partial_interval_ms: number }
 ---@field ui { float_position: string, float_width: number, show_waveform: boolean, statusline: boolean }
 ---@field snapshot { enabled: boolean, max_stack: number, use_git: boolean }
 ---@field keys { push_to_talk: string, toggle_listen: string, cancel: string, history: string, undo: string, switch_agent: string }
@@ -19,6 +19,9 @@ local M = {}
 M.defaults = {
 	agent = {
 		adapter = "claudecode",
+		-- auto_approve: false = prompt on every agent permission request (safest
+		-- for hands-free voice); true = auto-select the "allow" option.
+		auto_approve = false,
 	},
 	model = {
 		hf_repo = install.HF_REPO,
@@ -28,9 +31,15 @@ M.defaults = {
 	audio = {
 		sample_rate = 16000,
 		channels = 1,
-		vad_threshold = 0.5,
-		silence_duration_ms = 1000,
+		-- Energy-based VAD threshold (RMS of normalized f32 samples). Speech is
+		-- typically well under 0.1, so 0.01 is a sensible floor.
+		vad_threshold = 0.01,
+		-- How long to wait for trailing silence before finalizing an utterance.
+		-- This is the single biggest perceived-latency knob — keep it low.
+		silence_duration_ms = 400,
 		max_duration_ms = 30000,
+		-- How often to emit an interim (partial) transcript while still speaking.
+		partial_interval_ms = 700,
 	},
 	ui = {
 		float_position = "bottom-right",
@@ -96,9 +105,8 @@ function M.setup(opts)
 
 		local function cleanup()
 			M._listening = false
-			if M._float then
-				M._float:hide()
-			end
+			-- Don't hide the float here — let it linger so streamed agent output
+			-- stays visible; it auto-hides once state settles to idle.
 			pcall(vim.keymap.del, "n", "<Space>", { buffer = buf })
 			pcall(vim.keymap.del, "n", "<Esc>", { buffer = buf })
 		end
@@ -149,10 +157,17 @@ end
 
 --- Build the environment variable table for the daemon process.
 ---@param model table the model config table
+---@param audio table the audio config table
 ---@return table<string, string>
-local function build_daemon_env(model)
+local function build_daemon_env(model, audio)
 	local url = model.server_url or ("http://127.0.0.1:" .. model.server_port)
-	return { LAZYSPEAK_STT_URL = url }
+	return {
+		LAZYSPEAK_STT_URL = url,
+		LAZYSPEAK_VAD_THRESHOLD = tostring(audio.vad_threshold),
+		LAZYSPEAK_SILENCE_MS = tostring(audio.silence_duration_ms),
+		LAZYSPEAK_MAX_MS = tostring(audio.max_duration_ms),
+		LAZYSPEAK_PARTIAL_MS = tostring(audio.partial_interval_ms),
+	}
 end
 
 --- Start voice + core + UI, auto-launching llama-server if needed.
@@ -203,32 +218,13 @@ function M._start_pipeline()
 	M._core = Core:new(M.config)
 	M._core:on_event(function(event)
 		vim.schedule(function()
-			if event.type == "message" then
-				M._float:set_agent_text(event.text or "")
-			elseif event.type == "done" then
-				M._state = "idle"
-				ui.set_state("idle")
-				M._float:set_state("idle")
-				if M._session_cleanup then
-					M._session_cleanup()
-					M._session_cleanup = nil
-				end
-			elseif event.type == "error" then
-				M._state = "idle"
-				ui.set_state("idle")
-				M._float:set_state("idle")
-				vim.notify("[lazyspeak] error: " .. (event.error or "unknown"), vim.log.levels.ERROR)
-				if M._session_cleanup then
-					M._session_cleanup()
-					M._session_cleanup = nil
-				end
-			end
+			M._on_agent_event(event)
 		end)
 	end)
 	M._core:start()
 
 	-- Initialize voice daemon
-	local daemon_env = build_daemon_env(M.config.model)
+	local daemon_env = build_daemon_env(M.config.model, M.config.audio)
 	M._voice = Voice:new({ daemon_cmd = M.config.daemon_cmd, env = daemon_env })
 
 	M._voice:on_transcript(function(text, duration_ms)
@@ -236,10 +232,19 @@ function M._start_pipeline()
 		ui.set_state("dispatching")
 		M._listening = false
 		vim.schedule(function()
+			M._float:reset_turn()
 			M._float:set_transcript(text)
 			M._float:set_state("dispatching")
 		end)
 		M._core:handle_transcript(text, duration_ms)
+	end)
+
+	M._voice:on_partial(function(text)
+		vim.schedule(function()
+			if M._float and text ~= "" then
+				M._float:set_partial(text)
+			end
+		end)
 	end)
 
 	M._voice:on_status(function(state)
@@ -262,6 +267,100 @@ function M._start_pipeline()
 	end)
 
 	M._voice:start()
+end
+
+--- End the current agent turn: settle UI state and tear down session keymaps.
+---@param stop_reason? string
+local function finish_turn(stop_reason)
+	M._state = "idle"
+	ui.set_state("idle")
+	if M._float then
+		M._float:set_state("idle")
+	end
+	if stop_reason == "cancelled" then
+		vim.notify("[lazyspeak] turn cancelled", vim.log.levels.INFO)
+	end
+	if M._session_cleanup then
+		M._session_cleanup()
+		M._session_cleanup = nil
+	end
+end
+
+--- Route an IR event from the agent (via core) to the UI. Runs on the main loop.
+---@param event lazyspeak.Event
+function M._on_agent_event(event)
+	if not M._float then
+		return
+	end
+	local t = event.type
+
+	if t == "message" then
+		if M._state ~= "streaming" then
+			M._state = "streaming"
+			ui.set_state("streaming")
+			M._float:set_state("streaming")
+		end
+		M._float:append_agent_text(event.text or "")
+	elseif t == "thought" then
+		M._float:append_thought(event.text or "")
+	elseif t == "tool_call" then
+		M._float:add_tool_call(event)
+	elseif t == "diff" then
+		if event.diff then
+			M._float:add_diff(event.diff)
+		end
+	-- "plan" events are accepted but not rendered in the float yet.
+	elseif t == "permission" then
+		M._handle_permission(event.permission)
+	elseif t == "done" then
+		finish_turn(event.stop_reason)
+	elseif t == "error" then
+		vim.notify("[lazyspeak] error: " .. (event.error or "unknown"), vim.log.levels.ERROR)
+		finish_turn()
+	end
+end
+
+--- Present an agent permission request. Honors `agent.auto_approve`.
+---@param perm lazyspeak.Permission
+function M._handle_permission(perm)
+	if not perm then
+		return
+	end
+	local options = perm.options or {}
+
+	--- Find the first option whose kind allows the action.
+	local function first_allow()
+		for _, o in ipairs(options) do
+			if o.kind == "allow_once" or o.kind == "allow_always" then
+				return o.optionId
+			end
+		end
+		return options[1] and options[1].optionId
+	end
+
+	if M.config.agent and M.config.agent.auto_approve == true then
+		perm.respond(first_allow())
+		return
+	end
+
+	M._state = "permission"
+	ui.set_state("permission")
+	M._float:set_state("permission")
+	M._float:set_permission(perm)
+
+	vim.ui.select(options, {
+		prompt = perm.title or "Allow agent action?",
+		format_item = function(o)
+			return o.name or o.optionId
+		end,
+	}, function(choice)
+		M._float:clear_permission()
+		perm.respond(choice and choice.optionId or nil)
+		-- Resume the streaming state so the float keeps showing the turn.
+		M._state = "streaming"
+		ui.set_state("streaming")
+		M._float:set_state("streaming")
+	end)
 end
 
 function M.stop()

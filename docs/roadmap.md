@@ -8,8 +8,11 @@ Current state and planned work for lazyspeak.nvim.
 - [x] Cross-platform audio capture (cpal: Core Audio, ALSA, WASAPI)
 - [x] Energy-based voice activity detection
 - [x] Push-to-talk and continuous listening modes
-- [x] ACP adapter (JSON-RPC 2.0 over stdio)
-- [x] Claude Code adapter (CLI pipe)
+- [x] ACP adapter (JSON-RPC 2.0 over stdio, ACP v1) with streamed agent
+      output, tool calls, file edits, and permission prompts
+- [x] Claude Code over ACP via `@agentclientprotocol/claude-agent-acp`
+- [x] Interim (partial) transcripts + low-latency VAD endpointing for a
+      realtime feel
 - [x] Internal Representation (IR) decoupling plugin from agent protocols
 - [x] Git stash snapshots with voice-driven undo/revert
 - [x] Floating UI with waveform, transcript, and permission prompts
@@ -74,11 +77,19 @@ support. Better long-term bet if the ecosystem matures.
 time dominates latency, not the HTTP round-trip. Revisit when pre-built
 binaries are in place and build complexity matters less.
 
-### Claude Code WebSocket adapter
+### Native-audio fast path (Gemini)
 
-Upgrade the Claude Code adapter from CLI pipe (`claude --print -p`) to the
-full IDE protocol over WebSocket. Enables streaming responses, tool call
-visibility, and richer permission handling matching what VS Code gets.
+Most ACP agents (including Claude) take only text, so lazyspeak transcribes
+locally and sends a text content block. Gemini CLI (`gemini --acp`) advertises
+`promptCapabilities.audio` and is natively multimodal, so an opt-in fast path
+could forward the raw audio content block and skip local STT for that agent.
+
+### True streaming STT
+
+Partial transcripts give a realtime feel on top of batch Voxtral. Sub-200ms
+streaming would need a causal model (e.g. Voxtral Realtime) on a runtime that
+supports incremental encoding — a model + backend swap, tracked separately so
+it does not compromise the local-only, single-binary ethos.
 
 ### Wake word activation
 

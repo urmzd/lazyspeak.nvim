@@ -16,6 +16,9 @@ pub struct AudioConfig {
     pub vad_threshold: f32,
     pub silence_duration_ms: u64,
     pub max_duration_ms: u64,
+    /// How often to emit an interim (partial) transcript while speaking.
+    /// Zero disables partials.
+    pub partial_interval_ms: u64,
 }
 
 impl Default for AudioConfig {
@@ -24,8 +27,33 @@ impl Default for AudioConfig {
             sample_rate: 16000,
             channels: 1,
             vad_threshold: 0.01,
-            silence_duration_ms: 1000,
+            // Trailing-silence wait before finalizing. This is the dominant
+            // perceived-latency knob, so it is kept short.
+            silence_duration_ms: 400,
             max_duration_ms: 30000,
+            partial_interval_ms: 700,
+        }
+    }
+}
+
+impl AudioConfig {
+    /// Build from `LAZYSPEAK_*` environment variables, falling back to defaults
+    /// for anything unset or unparseable.
+    pub fn from_env() -> Self {
+        fn parse<T: std::str::FromStr>(key: &str, default: T) -> T {
+            std::env::var(key)
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(default)
+        }
+        let d = AudioConfig::default();
+        AudioConfig {
+            sample_rate: d.sample_rate,
+            channels: d.channels,
+            vad_threshold: parse("LAZYSPEAK_VAD_THRESHOLD", d.vad_threshold),
+            silence_duration_ms: parse("LAZYSPEAK_SILENCE_MS", d.silence_duration_ms),
+            max_duration_ms: parse("LAZYSPEAK_MAX_MS", d.max_duration_ms),
+            partial_interval_ms: parse("LAZYSPEAK_PARTIAL_MS", d.partial_interval_ms),
         }
     }
 }
@@ -34,6 +62,9 @@ impl Default for AudioConfig {
 pub enum AudioEvent {
     /// VAD detected speech start/stop.
     Vad(bool),
+    /// An interim snapshot of the in-progress utterance, emitted periodically
+    /// while the user is still speaking. The buffer is not cleared.
+    Partial { samples: Vec<f32>, duration_ms: u64 },
     /// A complete utterance was captured.
     Utterance { samples: Vec<f32>, duration_ms: u64 },
     /// An error occurred.
@@ -45,6 +76,10 @@ pub struct AudioCapture {
     config: AudioConfig,
     listening: Arc<AtomicBool>,
     device_sample_rate: u32,
+    /// True while a partial transcription is in flight. The capture loop skips
+    /// emitting new partials while set, giving a single-in-flight, latest-wins
+    /// policy so re-transcription requests never pile up.
+    partial_gate: Arc<AtomicBool>,
 }
 
 impl AudioCapture {
@@ -60,12 +95,18 @@ impl AudioCapture {
             config,
             listening: Arc::new(AtomicBool::new(false)),
             device_sample_rate: sample_rate,
+            partial_gate: Arc::new(AtomicBool::new(false)),
         }
     }
 
     /// Returns the actual sample rate of the capture device.
     pub fn sample_rate(&self) -> u32 {
         self.device_sample_rate
+    }
+
+    /// Shared gate cleared by the transcription stage when a partial completes.
+    pub fn partial_gate(&self) -> Arc<AtomicBool> {
+        self.partial_gate.clone()
     }
 
     /// Start capturing audio. Sends events through the returned receiver.
@@ -89,9 +130,11 @@ impl AudioCapture {
         };
 
         let listening = self.listening.clone();
+        let partial_gate = self.partial_gate.clone();
         let threshold = self.config.vad_threshold;
         let silence_dur = Duration::from_millis(self.config.silence_duration_ms);
         let max_dur = Duration::from_millis(self.config.max_duration_ms);
+        let partial_interval = self.config.partial_interval_ms;
         let sample_rate = stream_config.sample_rate.0;
         let device_channels = stream_config.channels as usize;
 
@@ -127,6 +170,10 @@ impl AudioCapture {
                     st.was_speaking = true;
                     st.speech_start = Some(Instant::now());
                     st.last_speech = Instant::now();
+                    st.last_partial = Instant::now();
+                    // Reset the gate so a partial stuck from a prior utterance
+                    // can't block this one.
+                    partial_gate.store(false, Ordering::Relaxed);
                     let _ = tx_clone.send(AudioEvent::Vad(true));
                 } else if is_speech {
                     st.last_speech = Instant::now();
@@ -147,6 +194,7 @@ impl AudioCapture {
 
                     if since_speech >= silence_dur || since_start >= max_dur {
                         st.was_speaking = false;
+                        partial_gate.store(false, Ordering::Relaxed);
                         let _ = tx_clone.send(AudioEvent::Vad(false));
 
                         let samples = std::mem::take(&mut st.buffer);
@@ -157,6 +205,19 @@ impl AudioCapture {
                         });
 
                         st.speech_start = None;
+                    } else if partial_interval > 0
+                        && st.last_partial.elapsed() >= Duration::from_millis(partial_interval)
+                        && !partial_gate.swap(true, Ordering::Relaxed)
+                    {
+                        // Single-in-flight: only emit when no partial is running.
+                        // The transcription stage clears the gate when done.
+                        st.last_partial = Instant::now();
+                        let samples = st.buffer.clone();
+                        let duration_ms = (samples.len() as u64 * 1000) / sample_rate as u64;
+                        let _ = tx_clone.send(AudioEvent::Partial {
+                            samples,
+                            duration_ms,
+                        });
                     }
                 }
             },
@@ -189,6 +250,7 @@ struct CaptureState {
     was_speaking: bool,
     last_speech: Instant,
     speech_start: Option<Instant>,
+    last_partial: Instant,
 }
 
 impl CaptureState {
@@ -198,6 +260,7 @@ impl CaptureState {
             was_speaking: false,
             last_speech: Instant::now(),
             speech_start: None,
+            last_partial: Instant::now(),
         }
     }
 }

@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::protocol::Event;
 use crate::transcribe::SpeechTranscriber;
@@ -8,12 +9,17 @@ use super::filter::UtteranceData;
 
 /// Transcribes utterance audio into text via the STT backend.
 ///
+/// Final utterances become `Event::Transcript`; interim snapshots become
+/// `Event::Partial`. After each transcription the shared `partial_gate` is
+/// cleared so the capture loop may emit the next partial (single-in-flight).
+///
 /// Uses `spawn_blocking` because `SpeechTranscriber::transcribe` is synchronous.
 pub struct TranscribeTransform {
     transcriber: Arc<dyn SpeechTranscriber>,
     sample_rate: u32,
     stt_available: bool,
     event_tx: tokio::sync::mpsc::Sender<Event>,
+    partial_gate: Arc<AtomicBool>,
 }
 
 impl TranscribeTransform {
@@ -22,12 +28,14 @@ impl TranscribeTransform {
         sample_rate: u32,
         stt_available: bool,
         event_tx: tokio::sync::mpsc::Sender<Event>,
+        partial_gate: Arc<AtomicBool>,
     ) -> Self {
         Self {
             transcriber,
             sample_rate,
             stt_available,
             event_tx,
+            partial_gate,
         }
     }
 }
@@ -41,35 +49,61 @@ impl Transform for TranscribeTransform {
         let sample_rate = self.sample_rate;
         let stt_available = self.stt_available;
         let duration_ms = input.duration_ms;
+        let is_final = input.is_final;
         let event_tx = self.event_tx.clone();
+        let partial_gate = self.partial_gate.clone();
 
         let event = tokio::task::spawn_blocking(move || {
-            if stt_available {
-                match transcriber.transcribe(&input.samples, sample_rate) {
-                    Ok(r) => Event::Transcript {
-                        text: r.text,
+            // Always release the gate when this transcription finishes, however
+            // it finishes, so the capture loop is never permanently blocked.
+            let _release = GateGuard(&partial_gate);
+
+            if !stt_available {
+                return if is_final {
+                    Event::Transcript {
+                        text: format!("[audio {duration_ms}ms — STT backend not available]"),
                         duration_ms,
-                    },
-                    Err(e) => {
-                        let _ = event_tx.blocking_send(Event::Error {
-                            message: format!("transcription failed: {e}"),
-                        });
-                        Event::Transcript {
-                            text: format!("[transcription error: {e}]"),
-                            duration_ms,
-                        }
+                    }
+                } else {
+                    Event::Partial {
+                        text: String::new(),
+                    }
+                };
+            }
+
+            match transcriber.transcribe(&input.samples, sample_rate) {
+                Ok(r) if is_final => Event::Transcript {
+                    text: r.text,
+                    duration_ms,
+                },
+                Ok(r) => Event::Partial { text: r.text },
+                Err(e) if is_final => {
+                    let _ = event_tx.blocking_send(Event::Error {
+                        message: format!("transcription failed: {e}"),
+                    });
+                    Event::Transcript {
+                        text: format!("[transcription error: {e}]"),
+                        duration_ms,
                     }
                 }
-            } else {
-                Event::Transcript {
-                    text: format!("[audio {duration_ms}ms — STT backend not available]"),
-                    duration_ms,
-                }
+                // Swallow partial errors quietly — the final pass will report.
+                Err(_) => Event::Partial {
+                    text: String::new(),
+                },
             }
         })
         .await
         .map_err(StreamSafeError::other)?;
 
         Ok(event)
+    }
+}
+
+/// Clears the partial gate on drop, regardless of how transcription ends.
+struct GateGuard<'a>(&'a AtomicBool);
+
+impl Drop for GateGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Relaxed);
     }
 }

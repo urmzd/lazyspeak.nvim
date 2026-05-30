@@ -116,8 +116,9 @@ async fn main() -> Result<()> {
     }
 
     // Audio capture.
-    let audio = Arc::new(AudioCapture::new(AudioConfig::default()));
+    let audio = Arc::new(AudioCapture::new(AudioConfig::from_env()));
     let device_sample_rate = audio.sample_rate();
+    let partial_gate = audio.partial_gate();
     let sync_rx = audio.start()?;
     audio.set_listening(false);
 
@@ -141,6 +142,7 @@ async fn main() -> Result<()> {
             device_sample_rate,
             stt_available,
             event_tx.clone(),
+            partial_gate,
         ))
         .into(EventSink::new(event_tx))
         .run_with_token(token)
