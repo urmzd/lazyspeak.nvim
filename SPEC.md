@@ -142,7 +142,15 @@ Every adapter implements `lazyspeak.Adapter`. The plugin never talks protocol-sp
 - Git repos: `git stash create` (creates stash ref without modifying working tree state, then stores the ref)
 - Non-git: reads and caches file contents in memory
 - Maintains a stack of snapshots per session
-- Revert = pop latest snapshot, restore files
+- Revert = pop latest snapshot, restore files via `git restore --source`.
+  `git stash apply` merges, so it aborted with "local changes would be
+  overwritten" exactly when the agent had edited the snapshotted files, which is
+  the only case undo exists for
+- A turn that changes nothing discards its snapshot, guarded by a content
+  fingerprint of `git diff HEAD`, so no unreachable stash is left behind
+- Eviction past `max_stack` drops the git stash with the record; dropping
+  resolves `stash@{n}` via `git stash list --format=%H`, since the default
+  listing prints no SHA to match against
 - Voice commands "undo", "revert", "go back" are intercepted before reaching the agent
 
 **sidebar.lua** — The single in-editor surface
@@ -163,6 +171,9 @@ Every adapter implements `lazyspeak.Adapter`. The plugin never talks protocol-sp
 #### 2. `crates/` — Rust daemon binary (~5 MB)
 
 - **lazyspeak**: single crate (lib + binary) — audio capture (cpal), energy-based VAD, STT HTTP client, JSON lines protocol, event loop wiring audio → STT → protocol over stdin/stdout
+- A failed transcription emits `Event::Error`, never a `Transcript` carrying
+  placeholder text. Fabricated transcripts were snapshotted and sent to the
+  agent as if the user had said them
 - Single static binary, no runtime dependencies
 
 #### 3. Voxtral Mini 3B — local inference
@@ -439,6 +450,7 @@ Shutdown is wired to `VimLeavePre`, so quitting never strands the daemon,
 | `:LazySpeakDismiss` | Hide the sidebar, leave the daemon running |
 | `:LazySpeakUndo` | Revert last agent edit |
 | `:LazySpeakSnapshots` | List snapshots for current session |
+| `:LazySpeakSnapshotsPrune` | Drop orphaned `lazyspeak:` stash entries |
 | `:LazySpeakInstall` | Build and install the daemon binary |
 
 Planned, not yet implemented: `:LazySpeakHistory`, `:LazySpeakAgent [cmd]`.

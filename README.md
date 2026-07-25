@@ -300,6 +300,7 @@ is healthy, a `loading model...` that sits for minutes is memory pressure.
 | `:LazySpeakDismiss` | Hide the sidebar, leave the daemon running |
 | `:LazySpeakUndo` | Revert last agent edit |
 | `:LazySpeakSnapshots` | List snapshots for current session |
+| `:LazySpeakSnapshotsPrune` | Drop orphaned `lazyspeak:` git stash entries |
 | `:LazySpeakInstall` | Build daemon binary |
 
 ### The sidebar
@@ -366,6 +367,21 @@ there is no *this*.
 
 Automatic context injection (current file, cursor line, selection) is not yet
 implemented. It is tracked in [docs/roadmap.md](docs/roadmap.md).
+
+### Undo and snapshots
+
+Before every turn is dispatched, the working tree is snapshotted with
+`git stash create` and stored, so `<leader>lu` (or saying "undo") can put it
+back. Undo restores the contents of files that existed at snapshot time; files
+the agent created afterwards are left in place, since deleting them is not
+recoverable from here.
+
+A turn that changes nothing hands its snapshot back rather than leaving a stash
+entry nothing can reach, and evicting past `snapshot.max_stack` drops the git
+stash along with the record. If you have accumulated orphans from earlier
+versions, `:LazySpeakSnapshotsPrune` lists them and asks before dropping. It only
+ever touches entries whose message begins with `lazyspeak:` and which no live
+snapshot refers to.
 
 ### Voice commands
 

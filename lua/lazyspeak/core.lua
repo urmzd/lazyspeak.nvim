@@ -42,6 +42,7 @@
 ---@field files string[]
 ---@field stash_ref string
 ---@field undo_data table<string, string>
+---@field digest? string content fingerprint at snapshot time, guards `discard`
 
 ---@class lazyspeak.Adapter
 ---@field start fun(opts: table): nil
@@ -86,6 +87,9 @@ function Core:new(opts)
 		session_id = tostring(os.time()),
 		snapshots = SnapshotStack:new(opts.snapshot or {}),
 		event_callback = nil,
+		-- Snapshot taken for the in-flight turn, discarded at `done` if the
+		-- agent turned out to change nothing.
+		pending_snapshot = nil,
 	}, Core)
 
 	adapter.on_event(function(event)
@@ -137,8 +141,12 @@ function Core:handle_transcript(text, duration_ms)
 		return
 	end
 
-	-- Create snapshot before dispatching
-	self.snapshots:create(self.session_id, text)
+	-- Snapshot before dispatching: an edit can land at any point in the turn,
+	-- so there is no later moment at which the pre-edit state is still knowable.
+	-- Settled at `done`/`error`, where a turn that changed nothing gives its
+	-- snapshot back instead of leaving an unreachable stash behind.
+	self:_settle_snapshot()
+	self.pending_snapshot = self.snapshots:create(self.session_id, text)
 
 	-- Dispatch to adapter
 	if self.adapter then
@@ -149,16 +157,26 @@ function Core:handle_transcript(text, duration_ms)
 		})
 	else
 		vim.schedule(function()
-			vim.notify(
-				string.format("[lazyspeak] no adapter — (%dms) %s", duration_ms, text),
-				vim.log.levels.WARN
-			)
+			vim.notify(string.format("[lazyspeak] no adapter — (%dms) %s", duration_ms, text), vim.log.levels.WARN)
 		end)
+	end
+end
+
+--- Release the in-flight turn's snapshot. `discard` keeps it if the working
+--- tree moved, so a turn that edited files still has its undo point.
+function Core:_settle_snapshot()
+	local snapshot = self.pending_snapshot
+	self.pending_snapshot = nil
+	if snapshot then
+		self.snapshots:discard(snapshot)
 	end
 end
 
 ---@param event lazyspeak.Event
 function Core:_on_adapter_event(event)
+	if event.type == "done" or event.type == "error" then
+		self:_settle_snapshot()
+	end
 	if self.event_callback then
 		self.event_callback(event)
 	end

@@ -11,4 +11,5 @@ command! LazySpeakHelp lua local s = require('lazyspeak')._ensure_sidebar() s:op
 command! LazySpeakDismiss lua require('lazyspeak').dismiss()
 command! LazySpeakUndo lua if require('lazyspeak')._core then require('lazyspeak')._core:handle_transcript('undo', 0) end
 command! LazySpeakSnapshots lua vim.notify(vim.inspect(require('lazyspeak')._core and require('lazyspeak')._core.snapshots:list() or {}))
+command! LazySpeakSnapshotsPrune lua require('lazyspeak').prune_snapshots()
 command! LazySpeakInstall lua require('lazyspeak.install').run()

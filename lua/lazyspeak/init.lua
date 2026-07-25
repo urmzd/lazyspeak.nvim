@@ -12,7 +12,7 @@ local M = {}
 ---@field audio { sample_rate: number, channels: number, vad_threshold: number, silence_duration_ms: number, max_duration_ms: number, partial_interval_ms: number }
 ---@field ui { sidebar_position: string, sidebar_width: number, sidebar_auto_open: boolean, statusline: boolean }
 ---@field snapshot { enabled: boolean, max_stack: number, use_git: boolean }
----@field keys { push_to_talk: string, toggle_listen: string, cancel: string, history: string, undo: string, switch_agent: string, log: string }
+---@field keys { push_to_talk: string, cancel: string, undo: string, sidebar: string, toggle_listen: string, history: string, switch_agent: string }
 ---@field daemon_cmd? string
 
 ---@type lazyspeak.Config
@@ -464,6 +464,44 @@ end
 ---@return string
 function M.status()
 	return ui.statusline()
+end
+
+--- Drop `lazyspeak:` stash entries that no live snapshot can reach.
+---
+--- These accumulate from turns that failed or changed nothing. They are still
+--- the user's data, so this lists them and asks before dropping anything.
+function M.prune_snapshots()
+	local stack = M._core and M._core.snapshots
+	if not stack then
+		local SnapshotStack = require("lazyspeak.snapshot").SnapshotStack
+		stack = SnapshotStack:new(M.config.snapshot or M.defaults.snapshot)
+	end
+
+	local orphans = stack:orphans()
+	if #orphans == 0 then
+		vim.notify("[lazyspeak] no orphaned snapshots")
+		return
+	end
+
+	local preview = {}
+	for i, o in ipairs(orphans) do
+		if i > 5 then
+			preview[#preview + 1] = ("  ...and %d more"):format(#orphans - 5)
+			break
+		end
+		preview[#preview + 1] = "  " .. o.message
+	end
+
+	local prompt = ("Drop %d orphaned lazyspeak stash entries?\n%s"):format(#orphans, table.concat(preview, "\n"))
+
+	vim.ui.select({ "no", "yes" }, { prompt = prompt }, function(choice)
+		if choice ~= "yes" then
+			vim.notify("[lazyspeak] kept " .. #orphans .. " stash entries")
+			return
+		end
+		local dropped, found = stack:prune_orphans()
+		vim.notify(("[lazyspeak] dropped %d of %d stash entries"):format(dropped, found))
+	end)
 end
 
 return M
