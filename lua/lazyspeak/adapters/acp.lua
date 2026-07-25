@@ -140,6 +140,34 @@ local function content_text(content)
 	return ""
 end
 
+--- Best-effort target of a tool call, for `Read(path)`-style display. ACP puts
+--- affected files in `locations`; agents that omit it usually name the path in
+--- `rawInput` instead.
+---@param update table
+---@return string?
+local function tool_target(update)
+	local loc = update.locations and update.locations[1]
+	if type(loc) == "table" and type(loc.path) == "string" then
+		return vim.fn.fnamemodify(loc.path, ":.")
+	end
+	local raw = update.rawInput
+	if type(raw) == "table" then
+		for _, key in ipairs({ "file_path", "filePath", "path", "abs_path", "notebook_path" }) do
+			if type(raw[key]) == "string" then
+				return vim.fn.fnamemodify(raw[key], ":.")
+			end
+		end
+		-- Shell-ish tools carry a command rather than a path.
+		if type(raw.command) == "string" then
+			return raw.command
+		end
+		if type(raw.pattern) == "string" then
+			return raw.pattern
+		end
+	end
+	return nil
+end
+
 --- Handle an agent→client `session/update` notification.
 ---@param params table
 local function handle_session_update(params)
@@ -158,6 +186,7 @@ local function handle_session_update(params)
 			session_id = sid,
 			tool_name = update.title or update.kind or "tool",
 			tool_call_id = update.toolCallId,
+			tool_detail = tool_target(update),
 			status = update.status,
 			text = raw ~= nil and vim.json.encode(raw) or nil,
 		})
@@ -340,6 +369,7 @@ local function handshake()
 		if err then
 			vim.schedule(function()
 				vim.notify("[lazyspeak] ACP initialize failed: " .. vim.inspect(err), vim.log.levels.ERROR)
+				emit({ type = "exit", error = "initialize failed" })
 			end)
 			return
 		end
@@ -353,10 +383,16 @@ local function handshake()
 			if sess_err then
 				vim.schedule(function()
 					vim.notify("[lazyspeak] ACP session/new failed: " .. vim.inspect(sess_err), vim.log.levels.ERROR)
+					emit({ type = "exit", error = "session/new failed" })
 				end)
 				return
 			end
 			_session_id = sess_result and sess_result.sessionId
+			-- The agent is only usable once a session exists; this is the
+			-- signal the UI uses to show the agent as connected.
+			vim.schedule(function()
+				emit({ type = "ready", session_id = _session_id or "" })
+			end)
 		end)
 	end)
 end
@@ -407,16 +443,17 @@ function M.start(opts)
 		on_exit = function(_, code, _)
 			_job_id = nil
 			_session_id = nil
-			if code ~= 0 then
-				local tail = table.concat(vim.list_slice(_stderr_ring, math.max(1, #_stderr_ring - 5)), "\n")
-				vim.schedule(function()
+			local tail = table.concat(vim.list_slice(_stderr_ring, math.max(1, #_stderr_ring - 5)), "\n")
+			vim.schedule(function()
+				if code ~= 0 then
 					emit({
 						type = "error",
-						session_id = _session_id or "",
+						session_id = "",
 						error = ("ACP agent exited with code %d%s"):format(code, tail ~= "" and ("\n" .. tail) or ""),
 					})
-				end)
-			end
+				end
+				emit({ type = "exit", error = code ~= 0 and ("exit code " .. code) or nil })
+			end)
 		end,
 		stdout_buffered = false,
 		stderr_buffered = false,

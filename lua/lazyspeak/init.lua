@@ -1,6 +1,6 @@
 local Voice = require("lazyspeak.voice").Voice
 local Core = require("lazyspeak.core").Core
-local Float = require("lazyspeak.ui").Float
+local Sidebar = require("lazyspeak.sidebar").Sidebar
 local ui = require("lazyspeak.ui")
 local install = require("lazyspeak.install")
 
@@ -10,9 +10,9 @@ local M = {}
 ---@field agent { adapter: string, cmd?: string[], auto_approve?: boolean }
 ---@field model { path: string, server_port: number, server_url?: string }
 ---@field audio { sample_rate: number, channels: number, vad_threshold: number, silence_duration_ms: number, max_duration_ms: number, partial_interval_ms: number }
----@field ui { float_position: string, float_width: number, show_waveform: boolean, statusline: boolean }
+---@field ui { sidebar_position: string, sidebar_width: number, sidebar_auto_open: boolean, statusline: boolean }
 ---@field snapshot { enabled: boolean, max_stack: number, use_git: boolean }
----@field keys { push_to_talk: string, toggle_listen: string, cancel: string, history: string, undo: string, switch_agent: string }
+---@field keys { push_to_talk: string, toggle_listen: string, cancel: string, history: string, undo: string, switch_agent: string, log: string }
 ---@field daemon_cmd? string
 
 ---@type lazyspeak.Config
@@ -42,9 +42,11 @@ M.defaults = {
 		partial_interval_ms = 700,
 	},
 	ui = {
-		float_position = "bottom-right",
-		float_width = 40,
-		show_waveform = true,
+		-- Which side the session sidebar opens on: "right" | "left".
+		sidebar_position = "right",
+		sidebar_width = 48,
+		-- Open the sidebar automatically when a session starts.
+		sidebar_auto_open = true,
 		statusline = true,
 	},
 	snapshot = {
@@ -54,10 +56,12 @@ M.defaults = {
 	},
 	keys = {
 		push_to_talk = "<leader>ls",
-		toggle_listen = "<leader>lS",
 		cancel = "<leader>lc",
-		history = "<leader>lh",
 		undo = "<leader>lu",
+		sidebar = "<leader>ll",
+		-- Reserved, not yet bound: see docs/roadmap.md.
+		toggle_listen = "<leader>lS",
+		history = "<leader>lh",
 		switch_agent = "<leader>la",
 	},
 }
@@ -71,8 +75,8 @@ M._voice = nil
 ---@type lazyspeak.Core?
 M._core = nil
 
----@type lazyspeak.Float?
-M._float = nil
+---@type lazyspeak.Sidebar?
+M._sidebar = nil
 
 ---@type string
 M._state = "inactive"
@@ -80,33 +84,62 @@ M._state = "inactive"
 ---@type boolean
 M._listening = false
 
+--- The sidebar is created lazily and shared: the keymap, the pipeline start-up
+--- path, and the event router all reach for it, and creating a second one
+--- would orphan the first window on screen.
+---@return lazyspeak.Sidebar
+function M._ensure_sidebar()
+	if not M._sidebar then
+		local cfg = M.config.ui or M.defaults.ui
+		M._sidebar = Sidebar:new({
+			width = cfg.sidebar_width,
+			position = cfg.sidebar_position,
+			keys = M.config.keys or M.defaults.keys,
+		})
+	end
+	return M._sidebar
+end
+
+--- Dismiss the sidebar without stopping the daemon. The conversation buffer
+--- survives, so reopening restores the full session.
+function M.dismiss()
+	if M._sidebar then
+		M._sidebar:close()
+	end
+end
+
 ---@param opts? table
 function M.setup(opts)
 	M.config = vim.tbl_deep_extend("force", M.defaults, opts or {})
 
 	local keys = M.config.keys
 
+	-- Never leave a daemon, llama-server, or agent process behind on exit.
+	vim.api.nvim_create_autocmd("VimLeavePre", {
+		group = vim.api.nvim_create_augroup("lazyspeak_shutdown", { clear = true }),
+		desc = "lazyspeak: shut down daemon and agent",
+		callback = function()
+			M.stop()
+		end,
+	})
+
 	vim.keymap.set("n", keys.push_to_talk, function()
 		if not M._voice or not M._voice:is_running() then
 			M.start()
 		end
 
-		-- Create float immediately if it doesn't exist yet
-		if not M._float then
-			M._float = Float:new({
-				width = M.config.ui.float_width,
-				position = M.config.ui.float_position,
-			})
+		local sidebar = M._ensure_sidebar()
+		if M.config.ui.sidebar_auto_open then
+			sidebar:open(false)
 		end
-		M._float:show()
-		M._float:set_state("ready")
+		sidebar:set_state("ready")
 
 		local buf = vim.api.nvim_get_current_buf()
 
 		local function cleanup()
 			M._listening = false
-			-- Don't hide the float here — let it linger so streamed agent output
-			-- stays visible; it auto-hides once state settles to idle.
+			-- The sidebar stays up: it is the reminder that a daemon is running.
+			-- <Esc> dismisses it explicitly, as does :LazySpeakStop.
 			pcall(vim.keymap.del, "n", "<Space>", { buffer = buf })
 			pcall(vim.keymap.del, "n", "<Esc>", { buffer = buf })
 		end
@@ -126,12 +159,13 @@ function M.setup(opts)
 			end
 		end, { buffer = buf, desc = "lazyspeak: toggle recording" })
 
-		-- <Esc> cancels and closes
+		-- <Esc> cancels and dismisses the UI
 		vim.keymap.set("n", "<Esc>", function()
 			if M._listening and M._voice then
 				M._voice:cancel()
 			end
 			cleanup()
+			M.dismiss()
 		end, { buffer = buf, desc = "lazyspeak: close" })
 
 		-- Auto-cleanup after dispatch completes
@@ -153,6 +187,10 @@ function M.setup(opts)
 			M._core:handle_transcript("undo", 0)
 		end
 	end, { desc = "lazyspeak: undo last edit" })
+
+	vim.keymap.set("n", keys.sidebar, function()
+		M._ensure_sidebar():toggle()
+	end, { desc = "lazyspeak: toggle session sidebar" })
 end
 
 --- Build the environment variable table for the daemon process.
@@ -176,29 +214,52 @@ function M.start()
 		return
 	end
 
-	local function update_float(state)
+	local function ui_state(state, detail)
 		vim.schedule(function()
-			if M._float then
-				M._float:set_state(state)
-			end
+			M._ensure_sidebar():set_state(state, detail)
+		end)
+	end
+
+	local function signal(key, value)
+		vim.schedule(function()
+			M._ensure_sidebar():set_status(key, value)
 		end)
 	end
 
 	-- If using the built-in server (no custom server_url), auto-start llama-server
 	if not M.config.model.server_url then
-		update_float("starting_server")
+		signal("stt", "starting")
+		ui_state("starting_server")
 		install.start_llama_server({
 			port = M.config.model.server_port,
 			hf_repo = M.config.model.hf_repo,
+			-- Surface the distinction between a slow first-run download and a
+			-- server that is genuinely stuck.
+			on_phase = function(phase, detail)
+				if phase == "downloading" then
+					ui_state("downloading_model", detail)
+				elseif phase == "loading" then
+					ui_state("loading_model")
+				elseif phase == "ready" then
+					signal("stt", "up")
+				elseif phase == "error" then
+					signal("stt", "error")
+					ui_state("inactive", detail)
+				end
+			end,
 		}, function()
-			update_float("starting_daemon")
+			signal("stt", "up")
+			ui_state("starting_daemon")
 			M._start_pipeline()
-			update_float("ready")
+			ui_state("ready")
 		end)
 	else
-		update_float("starting_daemon")
+		-- An external server is assumed reachable; the first transcription will
+		-- surface a failure if it is not.
+		signal("stt", "up")
+		ui_state("starting_daemon")
 		M._start_pipeline()
-		update_float("ready")
+		ui_state("ready")
 	end
 end
 
@@ -209,12 +270,13 @@ function M._start_pipeline()
 	end
 
 	-- Initialize UI
-	M._float = Float:new({
-		width = M.config.ui.float_width,
-		position = M.config.ui.float_position,
-	})
+	local sidebar = M._ensure_sidebar()
+	if M.config.ui.sidebar_auto_open then
+		sidebar:open(false)
+	end
 
 	-- Initialize core (adapter dispatch)
+	sidebar:set_status("agent", "starting")
 	M._core = Core:new(M.config)
 	M._core:on_event(function(event)
 		vim.schedule(function()
@@ -232,17 +294,17 @@ function M._start_pipeline()
 		ui.set_state("dispatching")
 		M._listening = false
 		vim.schedule(function()
-			M._float:reset_turn()
-			M._float:set_transcript(text)
-			M._float:set_state("dispatching")
+			local sb = M._ensure_sidebar()
+			sb:begin_turn(text)
+			sb:set_state("dispatching")
 		end)
 		M._core:handle_transcript(text, duration_ms)
 	end)
 
 	M._voice:on_partial(function(text)
 		vim.schedule(function()
-			if M._float and text ~= "" then
-				M._float:set_partial(text)
+			if text ~= "" then
+				M._ensure_sidebar():set_partial(text)
 			end
 		end)
 	end)
@@ -252,10 +314,9 @@ function M._start_pipeline()
 		ui.set_state(state)
 		vim.schedule(function()
 			if state == "listening" then
-				M._float:show()
-				M._float:set_state("listening")
+				M._ensure_sidebar():set_state("listening")
 			elseif state == "transcribing" then
-				M._float:set_state("transcribing")
+				M._ensure_sidebar():set_state("transcribing")
 			end
 		end)
 	end)
@@ -263,10 +324,14 @@ function M._start_pipeline()
 	M._voice:on_error(function(message)
 		vim.schedule(function()
 			vim.notify("[lazyspeak] daemon error: " .. message, vim.log.levels.ERROR)
+			local sb = M._ensure_sidebar()
+			sb:set_status("daemon", "error")
+			sb:add_error("daemon: " .. message)
 		end)
 	end)
 
 	M._voice:start()
+	sidebar:set_status("daemon", M._voice:is_running() and "up" or "error")
 end
 
 --- End the current agent turn: settle UI state and tear down session keymaps.
@@ -274,8 +339,9 @@ end
 local function finish_turn(stop_reason)
 	M._state = "idle"
 	ui.set_state("idle")
-	if M._float then
-		M._float:set_state("idle")
+	if M._sidebar then
+		M._sidebar:end_turn(stop_reason)
+		M._sidebar:set_state("idle")
 	end
 	if stop_reason == "cancelled" then
 		vim.notify("[lazyspeak] turn cancelled", vim.log.levels.INFO)
@@ -289,33 +355,37 @@ end
 --- Route an IR event from the agent (via core) to the UI. Runs on the main loop.
 ---@param event lazyspeak.Event
 function M._on_agent_event(event)
-	if not M._float then
-		return
-	end
 	local t = event.type
+	local sb = M._ensure_sidebar()
 
 	if t == "message" then
 		if M._state ~= "streaming" then
 			M._state = "streaming"
 			ui.set_state("streaming")
-			M._float:set_state("streaming")
+			sb:set_state("streaming")
 		end
-		M._float:append_agent_text(event.text or "")
+		sb:append_message(event.text or "")
 	elseif t == "thought" then
-		M._float:append_thought(event.text or "")
+		sb:append_thought(event.text or "")
 	elseif t == "tool_call" then
-		M._float:add_tool_call(event)
+		sb:add_tool_call(event)
 	elseif t == "diff" then
 		if event.diff then
-			M._float:add_diff(event.diff)
+			sb:add_diff(event.diff)
 		end
-	-- "plan" events are accepted but not rendered in the float yet.
+	elseif t == "ready" then
+		-- The agent only becomes usable once it has a session.
+		sb:set_status("agent", "up")
+	elseif t == "exit" then
+		sb:set_status("agent", event.error and "error" or "down")
+	-- "plan" events are accepted but not rendered yet.
 	elseif t == "permission" then
 		M._handle_permission(event.permission)
 	elseif t == "done" then
 		finish_turn(event.stop_reason)
 	elseif t == "error" then
 		vim.notify("[lazyspeak] error: " .. (event.error or "unknown"), vim.log.levels.ERROR)
+		sb:add_error(event.error or "unknown")
 		finish_turn()
 	end
 end
@@ -345,8 +415,9 @@ function M._handle_permission(perm)
 
 	M._state = "permission"
 	ui.set_state("permission")
-	M._float:set_state("permission")
-	M._float:set_permission(perm)
+	local sb = M._ensure_sidebar()
+	sb:set_state("permission")
+	sb:set_permission(perm)
 
 	vim.ui.select(options, {
 		prompt = perm.title or "Allow agent action?",
@@ -354,26 +425,39 @@ function M._handle_permission(perm)
 			return o.name or o.optionId
 		end,
 	}, function(choice)
-		M._float:clear_permission()
 		perm.respond(choice and choice.optionId or nil)
-		-- Resume the streaming state so the float keeps showing the turn.
+		sb:resolve_permission(choice and (choice.name or choice.optionId) or "denied")
+		-- Resume the streaming state so the sidebar keeps showing the turn.
 		M._state = "streaming"
 		ui.set_state("streaming")
-		M._float:set_state("streaming")
+		sb:set_state("streaming")
 	end)
 end
 
+--- Tear everything down: agent, daemon, STT server, and UI. Also runs on
+--- VimLeavePre so quitting Neovim never strands a background process.
 function M.stop()
 	if M._voice then
-		M._voice:stop()
+		pcall(function()
+			M._voice:stop()
+		end)
 		M._voice = nil
 	end
 	if M._core then
-		M._core:stop()
+		pcall(function()
+			M._core:stop()
+		end)
 		M._core = nil
 	end
 	install.stop_llama_server()
+
+	if M._sidebar then
+		M._sidebar:dispose()
+		M._sidebar = nil
+	end
+
 	M._state = "inactive"
+	ui.set_state("inactive")
 	M._listening = false
 end
 
