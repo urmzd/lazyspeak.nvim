@@ -14,7 +14,8 @@ Current state and planned work for lazyspeak.nvim.
 - [x] Interim (partial) transcripts + low-latency VAD endpointing for a
       realtime feel
 - [x] Internal Representation (IR) decoupling plugin from agent protocols
-- [x] Git stash snapshots with voice-driven undo/revert
+- [x] Pre-turn snapshots with voice-driven undo/revert, stored under
+      `$XDG_STATE_HOME` rather than in the user's `git stash`
 - [x] Session sidebar: fixed status header (stt/daemon/agent signals) over a
       framed conversation, one block per turn, tool calls as `Read(path)` with
       result glyphs, re-flowing on resize

@@ -137,20 +137,24 @@ Every adapter implements `lazyspeak.Adapter`. The plugin never talks protocol-sp
   the single ACP code path — no bespoke Claude logic
 - Auth is inherited from the environment (`ANTHROPIC_API_KEY` or `claude login`)
 
-**snapshot.lua** — Pre-edit snapshots for undo/revert
-- Creates a snapshot before every agent edit lands
-- Git repos: `git stash create` (creates stash ref without modifying working tree state, then stores the ref)
-- Non-git: reads and caches file contents in memory
-- Maintains a stack of snapshots per session
-- Revert = pop latest snapshot, restore files via `git restore --source`.
-  `git stash apply` merges, so it aborted with "local changes would be
-  overwritten" exactly when the agent had edited the snapshotted files, which is
-  the only case undo exists for
+**snapshot.lua** — Pre-turn snapshots for undo/revert
+- Stored **outside the repository**, at
+  `$XDG_STATE_HOME/nvim/lazyspeak/snapshots/<session>/<snapshot>/`. Writing
+  through `git stash store` put plugin bookkeeping into the user's own stash
+  list, where it accumulated and mixed with their real stashes. `stdpath("state")`
+  because this is regenerable session state, and where Neovim keeps undo/swap/shada
+- Captures tracked files differing from HEAD, copied with `vim.uv.fs_copyfile`
+  so trailing newlines and binary content round-trip byte-exactly
+- Revert restores captured files, and returns to HEAD any file the agent dirtied
+  that was clean at snapshot time. Agent-created files are left in place
 - A turn that changes nothing discards its snapshot, guarded by a content
-  fingerprint of `git diff HEAD`, so no unreachable stash is left behind
-- Eviction past `max_stack` drops the git stash with the record; dropping
-  resolves `stash@{n}` via `git stash list --format=%H`, since the default
-  listing prints no SHA to match against
+  fingerprint of `git diff HEAD` (porcelain names which files differ, not how,
+  so it missed edits to already-modified files)
+- Eviction past `max_stack`, `:LazySpeakStop`, and exit all delete stored copies;
+  startup sweeps session dirs older than `max_age_days`
+- Requires a git repository: without it there is no cheap way to know which
+  files a turn might touch
+- `orphans`/`prune_orphans` remain to migrate users off the old stash entries
 - Voice commands "undo", "revert", "go back" are intercepted before reaching the agent
 
 **sidebar.lua** — The single in-editor surface
@@ -498,7 +502,7 @@ require("lazyspeak").setup({
   snapshot = {
     enabled = true,
     max_stack = 20,        -- max snapshots per session
-    use_git = true,        -- prefer git stash (falls back to in-memory)
+    max_age_days = 7,      -- sweep sessions left by a crash
   },
 
   -- Keybindings

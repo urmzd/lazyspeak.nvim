@@ -370,18 +370,43 @@ implemented. It is tracked in [docs/roadmap.md](docs/roadmap.md).
 
 ### Undo and snapshots
 
-Before every turn is dispatched, the working tree is snapshotted with
-`git stash create` and stored, so `<leader>lu` (or saying "undo") can put it
-back. Undo restores the contents of files that existed at snapshot time; files
-the agent created afterwards are left in place, since deleting them is not
-recoverable from here.
+Before every turn is dispatched, the tracked files that differ from `HEAD` are
+copied aside, so `<leader>lu` (or saying "undo") can put them back.
 
-A turn that changes nothing hands its snapshot back rather than leaving a stash
-entry nothing can reach, and evicting past `snapshot.max_stack` drops the git
-stash along with the record. If you have accumulated orphans from earlier
-versions, `:LazySpeakSnapshotsPrune` lists them and asks before dropping. It only
-ever touches entries whose message begins with `lazyspeak:` and which no live
-snapshot refers to.
+Snapshots live **outside your repository**, under Neovim's state directory:
+
+```
+$XDG_STATE_HOME/nvim/lazyspeak/snapshots/<session>/<snapshot>/
+```
+
+Nothing is written to the repo itself until an undo actually restores files. An
+earlier version used `git stash create` plus `git stash store`, which put plugin
+bookkeeping into your own `git stash list` where it accumulated and mixed with
+your real stashes.
+
+State rather than config or data because this is regenerable session state, not
+settings you wrote, and it is where Neovim already keeps undo files, swap, and
+shada.
+
+Lifecycle:
+
+| Event | Effect |
+|-------|--------|
+| Turn changes nothing | snapshot handed back immediately |
+| Past `snapshot.max_stack` | oldest snapshot deleted from disk with its record |
+| `:LazySpeakStop` or quitting | the whole session's snapshots deleted |
+| Startup | session dirs older than `snapshot.max_age_days` swept |
+
+Undo restores the contents of files captured at snapshot time and returns to
+`HEAD` any file the agent dirtied that was clean beforehand. Files the agent
+created are left in place, since deleting them is not recoverable from here.
+Untracked files are not captured. Undo requires a git repository; outside one no
+snapshot is taken.
+
+`:LazySpeakSnapshotsPrune` sweeps stale session directories and, if you used a
+version that wrote to `git stash`, offers to drop those leftovers. It lists them
+and asks first, and only ever considers entries whose message begins with
+`lazyspeak:`.
 
 ### Voice commands
 
@@ -439,8 +464,8 @@ require("lazyspeak").setup({
 
   snapshot = {
     enabled = true,
-    max_stack = 20,
-    use_git = true,  -- prefer git stash, falls back to in-memory
+    max_stack = 20,      -- snapshots kept per session
+    max_age_days = 7,    -- sweep sessions a crash left behind
   },
 
   keys = {
