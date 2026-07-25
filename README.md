@@ -131,31 +131,241 @@ require("lazyspeak").setup({
 })
 ```
 
+## First run
+
+End to end, from a fresh install to your first voice-driven edit.
+
+**1. Confirm the pieces are in place.**
+
+```vim
+:checkhealth lazyspeak
+```
+
+This checks the `lazyspeak` daemon binary, `llama-server`, `npx`, your Anthropic
+credentials, the Voxtral model file, and whether `setup()` has run. If the daemon
+line warns, run `:LazySpeakInstall` to build it (`cargo install --path
+crates/lazyspeak`, roughly a minute). The model warning is expected until your
+first `<leader>ls`.
+
+**2. Open a real file** in the project you want to work on. The agent operates
+on your working directory, and snapshots are taken relative to it.
+
+**3. Start a session** with `<leader>ls`.
+
+The sidebar opens on the right. Its header carries three process signals, the
+current phase, and the keys that are useful right now, so you can always see
+which part is holding things up and what to press next:
+
+```
+ ● stt  ● daemon  ◐ agent
+ ⠹ downloading model 47%
+ <leader>lc interrupt   ? help
+────────────────────────────────
+```
+
+`○` down, `◐` starting, `●` up, `✗` failed. Until your first turn, the body
+below lists every key; press `?` in the sidebar to bring that reference back at
+any time, or `:LazySpeakHelp` from anywhere.
+
+On the very first run two slow things happen here, both one-time:
+
+- `llama-server` downloads the Voxtral GGUF. The header tracks it as
+  `downloading model NN%`, then `loading model...`. This can take a while on a
+  slow link; the editor stays responsive throughout, and the run is only
+  abandoned if the server goes completely silent for two minutes.
+- macOS prompts for **microphone access** for your terminal application. Grant
+  it. If you dismiss the prompt, recording silently produces nothing, and you
+  will need to enable it under System Settings > Privacy & Security > Microphone.
+
+Wait for the header to read `press <Space> to record`.
+
+**4. Speak.** Press `<Space>` to start recording, say what you want, press
+`<Space>` again to send.
+
+```
+"add a doc comment to the parse function in core.lua"
+```
+
+Name the file you mean. The agent is told your working directory and can read
+files itself, but it is **not** told which buffer you have open or where your
+cursor is, so "the function under the cursor" will not work. See
+[Editor context](#editor-context).
+
+Your interim transcript appears in a provisional box while you talk, and is
+replaced by the final text when you stop.
+
+**5. Watch it work.** Each turn is framed in the sidebar, and each thing the
+agent does gets its own block:
+
+```
+╭─ you ──────────────────────────────── 22:30 ─╮
+│ refactor the auth middleware to use JWT      │
+╰──────────────────────────────────────────────╯
+
+⏺ thinking
+  The current check reads a session cookie.
+
+⏺ agent
+  I will switch the session check to a JWT
+  verify and keep the same error shape.
+
+⏺ Read(lua/auth/middleware.lua)
+  ⎿ ✓ completed
+
+⏺ Edit(lua/auth/middleware.lua)
+  ⎿ ◐ pending
+```
+
+**6. Approve the edit.** With the default `auto_approve = false`, every file
+change raises a `vim.ui.select` prompt. The ask and your answer are both
+recorded in the conversation:
+
+```
+⏺ ? Edit middleware.lua?
+  ⎿ allow once
+```
+
+**7. Undo if you want it back.** `<leader>lu` reverts the last agent edit via the
+snapshot stack. Saying "undo", "revert", or "go back" does the same thing without
+touching the keyboard. Worth exercising once early, before you trust it with
+something real.
+
+**8. Finish up.** `<Esc>` dismisses the UI but leaves the daemon warm, so the
+next `<leader>ls` is instant. `:LazySpeakStop` shuts everything down and frees
+the model's memory. Quitting Neovim tears it all down either way.
+
+### Tuning after a few turns
+
+| Symptom | Knob |
+|---------|------|
+| It cuts you off mid-sentence | raise `audio.silence_duration_ms` (default 400) |
+| It waits too long before sending | lower `audio.silence_duration_ms` |
+| It triggers on background noise | raise `audio.vad_threshold` (default 0.01) |
+| Permission prompts are tedious | `agent.auto_approve = true` |
+| The sidebar is in the way | `ui.sidebar_auto_open = false`, open it with `<leader>ll` |
+| The sidebar is too narrow or wide | `ui.sidebar_width` (default 48) |
+| You want it on the left | `ui.sidebar_position = "left"` |
+
+## Resource requirements
+
+Voxtral Mini 3B runs entirely on your machine, so the STT server is the main
+cost. Budget roughly:
+
+| | |
+|---|---|
+| Disk | ~3 GB for the GGUF plus audio encoder, downloaded once |
+| Memory, resident | ~4-5 GB once weights, KV cache, and Metal buffers are up |
+| Practical floor | 16 GB unified memory; Apple Silicon uses Metal automatically |
+
+The failure mode worth knowing about is memory contention rather than raw
+capacity. If you already run another local model, the two compete: Ollama's
+server, for instance, is often launched with `--no-mmap`, which pins its weights
+so they cannot be evicted through the page cache. Two hot 3B models plus an
+editor on a 16-24 GB machine will push the system into swap, and model loading
+slows from seconds to minutes.
+
+If startup crawls, check pressure before blaming the plugin:
+
+```sh
+sysctl vm.swapusage      # swap nearly full means you are already thrashing
+pgrep -fl llama-server   # something else may already hold a model resident
+```
+
+Stopping the other model, or a reboot to reclaim swap, is usually the fix. The
+sidebar header distinguishes the cases for you: a moving `downloading model NN%`
+is healthy, a `loading model...` that sits for minutes is memory pressure.
+
 ## Usage
 
 ### Keybindings
 
 | Key | Mode | Action |
 |-----|------|--------|
-| `<leader>ls` | n | Push-to-talk (press to listen, press again to send) |
-| `<leader>lS` | n | Toggle continuous listening (VAD auto-segments) |
+| `<leader>ls` | n | Open the session (starts the daemon if needed) |
+| `<Space>` | n | Start/stop recording while the session is open |
+| `<Esc>` | n | Cancel recording and dismiss the UI |
 | `<leader>lc` | n | Cancel current recording or agent request |
-| `<leader>lh` | n | Show transcript history |
 | `<leader>lu` | n | Undo last agent edit (revert snapshot) |
-| `<leader>la` | n | Switch agent |
+| `<leader>ll` | n | Toggle the session sidebar |
 
 ### Commands
 
 | Command | Description |
 |---------|-------------|
 | `:LazySpeakStart` | Start daemon + agent |
-| `:LazySpeakStop` | Stop everything |
+| `:LazySpeakStop` | Stop everything and tear down the UI |
 | `:LazySpeakStatus` | Show daemon/agent/model status |
-| `:LazySpeakHistory` | Transcript history buffer |
+| `:LazySpeakSidebar` | Toggle the session sidebar |
+| `:LazySpeakHelp` | Toggle the key reference in the sidebar |
+| `:LazySpeakDismiss` | Hide the sidebar, leave the daemon running |
 | `:LazySpeakUndo` | Revert last agent edit |
 | `:LazySpeakSnapshots` | List snapshots for current session |
-| `:LazySpeakAgent [cmd]` | Switch ACP agent |
 | `:LazySpeakInstall` | Build daemon binary |
+
+### The sidebar
+
+One surface, on the right, full height. A fixed four-row header carries the three
+process signals, the current phase, and contextual hints; below it the session
+reads as a conversation.
+
+Hints follow state, so they only ever show keys that do something right now:
+
+| State | Hints |
+|-------|-------|
+| idle | `<leader>ls talk`, `<leader>lu undo` |
+| ready | `<Space> record`, `<Esc> close` |
+| recording | `<Space> send`, `<Esc> cancel` |
+| agent working | `<leader>lc interrupt` |
+| awaiting permission | `answer the prompt` |
+
+They reflect what you actually bound, not the defaults. Two keys are local to the
+sidebar window: `?` toggles the full reference, `q` closes it.
+
+Colours link to standard groups (`DiagnosticOk`/`Warn`/`Error`, `Comment`,
+`Title`, `Function`), so the sidebar follows your colorscheme. Override any of
+the `LazySpeak*` groups to change it.
+
+Every item is framed as its own block, so you can tell a response from a file
+read at a glance: your turns are boxed with a timestamp, agent output and
+thinking are bulleted, and tool calls render as `Read(path)` with a `⎿` result
+line carrying `✓`, `◐`, or `✗`.
+
+Text is hard-wrapped to the window width rather than soft-wrapped, so borders
+and gutters stay aligned. Resizing the window re-flows the whole conversation.
+
+The sidebar persists across turns and has real scrollback. Following the tail
+pauses automatically when you scroll back, so reading mid-stream does not yank
+you to the bottom.
+
+| Action | Sidebar window | Conversation | Daemon |
+|--------|---------------|--------------|--------|
+| `<Esc>` / `:LazySpeakDismiss` | closed | kept | running |
+| `:LazySpeakStop` | closed | deleted | stopped |
+| Exit Neovim | closed | deleted | stopped |
+
+Everything shuts down on exit, so quitting Neovim never leaves the daemon,
+`llama-server`, or the agent process running.
+
+### Editor context
+
+What the agent receives today is deliberately minimal:
+
+| Sent | When |
+|------|------|
+| Working directory (`cwd`) | once, at `session/new` |
+| Your transcript, as a text block | every turn |
+
+That is all. The agent is **not** told which buffer is open, your cursor
+position, the visual selection, or any buffer contents. It advertises
+`fs.readTextFile` and `fs.writeTextFile`, so it can read and edit any file under
+the working directory on its own initiative, but it has to find them first.
+
+The practical consequence: say what you mean by name. "Rename `handle_transcript`
+in core.lua" works. "Fix this function" or "the line I'm on" does not, because
+there is no *this*.
+
+Automatic context injection (current file, cursor line, selection) is not yet
+implemented. It is tracked in [docs/roadmap.md](docs/roadmap.md).
 
 ### Voice commands
 
@@ -205,9 +415,9 @@ require("lazyspeak").setup({
   },
 
   ui = {
-    float_position = "bottom-right",
-    float_width = 40,
-    show_waveform = true,
+    sidebar_position = "right",   -- "right" | "left"
+    sidebar_width = 48,
+    sidebar_auto_open = true,     -- open the sidebar when a session starts
     statusline = true,
   },
 
@@ -219,11 +429,9 @@ require("lazyspeak").setup({
 
   keys = {
     push_to_talk = "<leader>ls",
-    toggle_listen = "<leader>lS",
     cancel = "<leader>lc",
-    history = "<leader>lh",
     undo = "<leader>lu",
-    switch_agent = "<leader>la",
+    sidebar = "<leader>ll",
   },
 })
 ```

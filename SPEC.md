@@ -22,11 +22,14 @@ No cloud STT dependency. No TTS. You speak, it codes.
 │  ┌───────────────────────────────────────────────────────────┐  │
 │  │ lazyspeak.nvim (Lua)                                      │  │
 │  │                                                           │  │
-│  │  ┌───────────┐  ┌──────────┐  ┌────────┐  ┌───────────┐ │  │
-│  │  │ voice.lua │  │ core.lua │  │ ui.lua │  │ health.lua│ │  │
-│  │  │ mic ctl   │  │ IR types │  │ float  │  │ checkhealth│ │  │
-│  │  └─────┬─────┘  └────┬─────┘  │ status │  └───────────┘ │  │
-│  │        │              │        └────────┘                 │  │
+│  │  ┌───────────┐  ┌──────────┐  ┌───────────┐ ┌──────────┐│  │
+│  │  │ voice.lua │  │ core.lua │  │sidebar.lua│ │health.lua││  │
+│  │  │ mic ctl   │  │ IR types │  │ status +  │ │checkhealth│  │
+│  │  └─────┬─────┘  └────┬─────┘  │conversation│└──────────┘│  │
+│  │        │              │        ├───────────┤             │  │
+│  │        │              │        │  ui.lua   │             │  │
+│  │        │              │        │ statusline│             │  │
+│  │        │              │        └───────────┘             │  │
 │  │        │         ┌────┴─────────────────┐                 │  │
 │  │        │         │  adapters/            │                 │  │
 │  │        │         │  ┌─────────────────┐  │                │  │
@@ -142,10 +145,20 @@ Every adapter implements `lazyspeak.Adapter`. The plugin never talks protocol-sp
 - Revert = pop latest snapshot, restore files
 - Voice commands "undo", "revert", "go back" are intercepted before reaching the agent
 
-**ui.lua** — Visual feedback
-- Floating window (waveform + transcript + permission prompts)
-- Status line component
-- Diff display for agent-proposed edits
+**sidebar.lua** — The single in-editor surface
+- Right-hand vertical split, full height
+- Fixed 4-row header: process signals (stt/daemon/agent), current phase,
+  state-aware key hints, and a rule
+- Conversation below, held as a list of typed entries rather than raw text
+- Entry kinds: turn, partial, message, thought, tool, permission, error, note
+- Each entry renders its own frame; streaming re-renders only the entry it
+  touches; a resize re-flows everything from the model
+- Hard-wrapped to window width with `wrap` off, so borders stay aligned
+- Key reference shown as the empty state, toggled thereafter with `?`
+- Highlights link to standard groups so the sidebar follows the colorscheme
+
+**ui.lua** — Status line component only
+- Compact state string for lualine and friends
 
 #### 2. `crates/` — Rust daemon binary (~5 MB)
 
@@ -165,7 +178,8 @@ lazyspeak.nvim implements an **ACP host** — the Neovim-side client that speaks
 ### Lifecycle
 
 ```
-1. User presses <leader>ls      → start listening
+1. User presses <leader>ls      → open session, start daemon if needed
+1a. User presses <Space>         → start listening
 2. User speaks                   → daemon captures audio, runs VAD
 3. User stops / silence detected → daemon transcribes via Voxtral
 4. Transcript received           → check for voice commands (undo/revert)
@@ -173,11 +187,28 @@ lazyspeak.nvim implements an **ACP host** — the Neovim-side client that speaks
    4b. Otherwise                 → continue to step 5
 5. Snapshot created              → git stash create (or cache file contents)
 6. Transcript sent to adapter    → adapter translates IR → agent protocol
-7. Agent streams response        → session/update notifications
+7. Agent streams response        → session/update notifications → sidebar
 8. Agent requests file edit      → adapter translates → IR Event → Neovim applies
-9. Agent requests permission     → UI prompt → user approves with y/n
+9. Agent requests permission     → vim.ui.select; sidebar records the ask
 10. Agent done                   → snapshot kept on stack for future undo
 ```
+
+### What context reaches the agent
+
+Deliberately minimal today:
+
+| Sent | When |
+|------|------|
+| `cwd` (`vim.fn.getcwd()`) | once, in `session/new` |
+| Transcript as a single `text` content block | every `session/prompt` |
+
+The client advertises `fs.readTextFile` and `fs.writeTextFile`, so the agent can
+read and edit anything under `cwd` on its own initiative — but it is never told
+the active buffer, cursor position, visual selection, or any buffer contents.
+
+Consequence: deictic prompts ("this function", "the line I'm on") cannot work.
+Automatic context injection is unimplemented; ACP's `resource_link` and
+`resource` content blocks are the intended vehicle when it lands.
 
 ### Voice Commands (intercepted before agent)
 
@@ -302,16 +333,19 @@ require("lazyspeak").setup({
 
 ### Keybindings
 
-All under `<leader>ls` prefix:
+Implemented:
 
 | Key | Mode | Action |
 |-----|------|--------|
-| `<leader>ls` | n | Push-to-talk (press to listen, press again to send) |
-| `<leader>lS` | n | Toggle continuous listening (VAD auto-segments) |
+| `<leader>ls` | n | Open the session (starts the daemon if needed) |
+| `<Space>` | n | Start/stop recording while the session is open |
+| `<Esc>` | n | Cancel recording and dismiss the UI |
 | `<leader>lc` | n | Cancel current recording or agent request |
-| `<leader>lh` | n | Show transcript history |
 | `<leader>lu` | n | Undo last agent edit (revert snapshot) |
-| `<leader>la` | n | Switch agent (`:LazySpeakAgent`) |
+| `<leader>ll` | n | Toggle the session sidebar |
+
+Reserved in `defaults.keys` but not yet bound: `toggle_listen` (`<leader>lS`),
+`history` (`<leader>lh`), `switch_agent` (`<leader>la`).
 
 ### Status Line
 
@@ -325,36 +359,89 @@ All under `<leader>ls` prefix:
 | Agent working | `"ls:>>>"` |
 | Agent awaiting permission | `"ls:???"` |
 
-### Floating Window
+### The Sidebar
 
-Bottom-right float appears during active use:
+One surface holds everything: a right-hand vertical split, full height. A fixed
+4-row header answers "is anything wrong, and what do I press?" while the
+conversation below answers
+"what did it do?".
 
 ```
-┌─ lazyspeak ──────────────────┐
-│ ▁▂▃▅▇▅▃▂▁  listening...     │
-│                              │
-│ "refactor the auth           │
-│  middleware to use JWT"      │
-│                              │
-│ [agent] Writing src/auth.lua │
-│ [y/n] Allow?                 │
-└──────────────────────────────┘
+ ● stt  ● daemon  ◐ agent
+ ⠹ agent working...
+ <leader>lc interrupt   ? help
+────────────────────────────────────────────────
+╭─ you ──────────────────────────────── 22:30 ─╮
+│ refactor the auth middleware to use JWT      │
+╰──────────────────────────────────────────────╯
+
+⏺ thinking
+  The current check reads a session cookie.
+
+⏺ agent
+  I will switch the session check to a JWT
+  verify and keep the same error shape.
+
+⏺ Read(lua/auth/middleware.lua)
+  ⎿ ✓ completed
+
+⏺ Edit(lua/auth/middleware.lua)
+  ⎿ ◐ pending
+
+⏺ ? Edit middleware.lua?
+  ⎿ allow once
 ```
 
-Permission requests from the agent appear inline. User approves with `y`/`n` or configures auto-approve.
+**Header.** Three process signals (`○` down, `◐` starting, `●` up, `✗` failed),
+the current phase with a spinner while work is in flight, and hints for the keys
+that are useful in that state. The header is a constant row count rewritten in
+place, so status ticks never disturb entry offsets below it.
+
+Hints list only globally-bound maps, so a hint is never shown for something that
+would not work from wherever the cursor is. `?` and `q` are local to the sidebar
+window and are labelled as such in the reference block.
+
+**Discovery.** The key reference occupies the conversation region until the first
+entry arrives, then gives way to it. `?` (or `:LazySpeakHelp`) brings it back
+above the conversation without disturbing the entries.
+
+**Conversation.** Held as a list of typed entries, not appended text. That is
+what makes per-entry framing, cheap streaming, and resize re-flow possible:
+streaming mutates one entry's text and re-renders only its row range, while a
+width change re-renders every entry from the model.
+
+Content is hard-wrapped to the window width and `wrap` is off. Soft wrapping
+would break box borders and gutters, so the renderer owns every line.
+
+Permission requests are driven by `vim.ui.select`; the sidebar records both the
+ask and the resolution as a single entry.
+
+### Lifetimes
+
+| Action | Sidebar window | Conversation buffer | Daemon |
+|--------|---------------|--------------------|--------|
+| `<Esc>` / `:LazySpeakDismiss` | closed | kept | running |
+| `:LazySpeakStop` | closed | deleted | stopped |
+| Exit Neovim (`VimLeavePre`) | closed | deleted | stopped |
+
+Shutdown is wired to `VimLeavePre`, so quitting never strands the daemon,
+`llama-server`, or the agent process.
 
 ### Commands
 
 | Command | Description |
 |---------|-------------|
 | `:LazySpeakStart` | Start daemon + agent |
-| `:LazySpeakStop` | Stop everything |
+| `:LazySpeakStop` | Stop everything and tear down the UI |
 | `:LazySpeakStatus` | Show daemon/agent/model status |
-| `:LazySpeakHistory` | Transcript history buffer |
+| `:LazySpeakSidebar` | Toggle the session sidebar |
+| `:LazySpeakHelp` | Toggle the key reference in the sidebar |
+| `:LazySpeakDismiss` | Hide the sidebar, leave the daemon running |
 | `:LazySpeakUndo` | Revert last agent edit |
 | `:LazySpeakSnapshots` | List snapshots for current session |
-| `:LazySpeakAgent [cmd]` | Switch ACP agent |
-| `:LazySpeakInstall` | Download model + install Python deps |
+| `:LazySpeakInstall` | Build and install the daemon binary |
+
+Planned, not yet implemented: `:LazySpeakHistory`, `:LazySpeakAgent [cmd]`.
 
 ## Configuration
 
@@ -389,10 +476,10 @@ require("lazyspeak").setup({
 
   -- UI
   ui = {
-    float_position = "bottom-right",
-    float_width = 40,
-    show_waveform = true,
-    statusline = true,
+    sidebar_position = "right",   -- "right" | "left"
+    sidebar_width = 48,
+    sidebar_auto_open = true,     -- open the sidebar when a session starts
+    statusline = true
   },
 
   -- Snapshots
@@ -405,11 +492,13 @@ require("lazyspeak").setup({
   -- Keybindings
   keys = {
     push_to_talk = "<leader>ls",
-    toggle_listen = "<leader>lS",
     cancel = "<leader>lc",
-    history = "<leader>lh",
     undo = "<leader>lu",
-    switch_agent = "<leader>la",
+    sidebar = "<leader>ll",
+    -- Reserved, not yet bound:
+    -- toggle_listen = "<leader>lS",
+    -- history = "<leader>lh",
+    -- switch_agent = "<leader>la",
   },
 })
 ```
@@ -516,7 +605,8 @@ lazyspeak.nvim/
 │       ├── adapters/
 │       │   ├── acp.lua       -- ACP adapter (JSON-RPC 2.0 / stdio)
 │       │   └── claudecode.lua -- Claude Code adapter (CLI pipe)
-│       ├── ui.lua            -- floating window, statusline
+│       ├── sidebar.lua       -- status header + conversation
+│       ├── ui.lua            -- statusline component
 │       └── health.lua        -- :checkhealth lazyspeak
 ├── plugin/
 │   └── lazyspeak.vim         -- command definitions

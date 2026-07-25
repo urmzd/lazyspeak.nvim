@@ -15,12 +15,40 @@ Current state and planned work for lazyspeak.nvim.
       realtime feel
 - [x] Internal Representation (IR) decoupling plugin from agent protocols
 - [x] Git stash snapshots with voice-driven undo/revert
-- [x] Floating UI with waveform, transcript, and permission prompts
+- [x] Session sidebar: fixed status header (stt/daemon/agent signals) over a
+      framed conversation, one block per turn, tool calls as `Read(path)` with
+      result glyphs, re-flowing on resize
+- [x] Full teardown on `VimLeavePre` so exiting never strands a process
+- [x] Non-blocking `llama-server` health probe with an idle-progress watchdog,
+      replacing a `io.popen`+curl poll that could freeze the editor indefinitely
 - [x] Auto-managed llama-server lifecycle
 - [x] Async/tokio pipeline architecture (streamsafe)
 - [x] `:LazySpeakInstall` (cargo build + model auto-download)
 
 ## Near-term
+
+### Editor context in the prompt
+
+Today the agent receives only the transcript plus `cwd` at session creation. It
+is never told the active buffer, cursor position, or visual selection, so
+deictic prompts ("this function", "the line I'm on", "fix this") cannot work —
+the user has to name files and symbols explicitly.
+
+**Approach:** Attach context to `session/prompt` alongside the text block. ACP
+provides `resource_link` (a URI reference the agent may fetch) and `resource`
+(inlined content) content blocks, which is the protocol-correct vehicle rather
+than stuffing a preamble into the transcript. Send the active buffer's path as a
+`resource_link` on every turn, plus cursor line and any visual selection range.
+Inline the selection itself when one exists, since that is usually the subject.
+
+**Open questions:** How much to send by default without bloating every prompt or
+leaking unrelated buffers; whether context should be opt-in per turn via a voice
+command ("with this file", "just the selection"); and how agents that ignore
+`resource_link` should be handled.
+
+**Impact:** The difference between dictating a specification and dictating an
+instruction. This is the largest single gap between lazyspeak and using a coding
+agent by hand.
 
 ### Silero VAD — replace energy-based VAD
 
