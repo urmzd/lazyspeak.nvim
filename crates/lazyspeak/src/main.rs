@@ -141,7 +141,6 @@ async fn main() -> Result<()> {
             transcriber,
             device_sample_rate,
             stt_available,
-            event_tx.clone(),
             partial_gate,
         ))
         .into(EventSink::new(event_tx))

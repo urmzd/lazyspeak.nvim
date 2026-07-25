@@ -13,12 +13,16 @@ use super::filter::UtteranceData;
 /// `Event::Partial`. After each transcription the shared `partial_gate` is
 /// cleared so the capture loop may emit the next partial (single-in-flight).
 ///
+/// A failure never becomes a `Transcript`. Emitting placeholder text like
+/// `[audio 412ms — STT backend not available]` as if the user had said it made
+/// the plugin snapshot the working tree and prompt the agent with the error
+/// string; failures are `Event::Error` so the host can treat them as such.
+///
 /// Uses `spawn_blocking` because `SpeechTranscriber::transcribe` is synchronous.
 pub struct TranscribeTransform {
     transcriber: Arc<dyn SpeechTranscriber>,
     sample_rate: u32,
     stt_available: bool,
-    event_tx: tokio::sync::mpsc::Sender<Event>,
     partial_gate: Arc<AtomicBool>,
 }
 
@@ -27,14 +31,12 @@ impl TranscribeTransform {
         transcriber: Arc<dyn SpeechTranscriber>,
         sample_rate: u32,
         stt_available: bool,
-        event_tx: tokio::sync::mpsc::Sender<Event>,
         partial_gate: Arc<AtomicBool>,
     ) -> Self {
         Self {
             transcriber,
             sample_rate,
             stt_available,
-            event_tx,
             partial_gate,
         }
     }
@@ -50,7 +52,6 @@ impl Transform for TranscribeTransform {
         let stt_available = self.stt_available;
         let duration_ms = input.duration_ms;
         let is_final = input.is_final;
-        let event_tx = self.event_tx.clone();
         let partial_gate = self.partial_gate.clone();
 
         let event = tokio::task::spawn_blocking(move || {
@@ -60,9 +61,11 @@ impl Transform for TranscribeTransform {
 
             if !stt_available {
                 return if is_final {
-                    Event::Transcript {
-                        text: format!("[audio {duration_ms}ms — STT backend not available]"),
-                        duration_ms,
+                    Event::Error {
+                        message: format!(
+                            "STT backend unavailable, discarded {duration_ms}ms of audio \
+                             (is llama-server reachable?)"
+                        ),
                     }
                 } else {
                     Event::Partial {
@@ -77,15 +80,9 @@ impl Transform for TranscribeTransform {
                     duration_ms,
                 },
                 Ok(r) => Event::Partial { text: r.text },
-                Err(e) if is_final => {
-                    let _ = event_tx.blocking_send(Event::Error {
-                        message: format!("transcription failed: {e}"),
-                    });
-                    Event::Transcript {
-                        text: format!("[transcription error: {e}]"),
-                        duration_ms,
-                    }
-                }
+                Err(e) if is_final => Event::Error {
+                    message: format!("transcription failed: {e}"),
+                },
                 // Swallow partial errors quietly — the final pass will report.
                 Err(_) => Event::Partial {
                     text: String::new(),
