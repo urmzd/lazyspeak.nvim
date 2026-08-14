@@ -60,5 +60,10 @@ packages:
   - path: .
     version_files:
       - Cargo.toml
+    # The root Cargo.toml is a virtual workspace manifest — it carries
+    # [workspace.package].version (which version_files bumps) but no
+    # [package], so it is not publishable itself. `workspace: true` makes
+    # the cargo publisher iterate [workspace].members instead.
     publish:
       type: cargo
+      workspace: true
