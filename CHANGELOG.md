@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.1 (2026-08-14)
+
+### Bug Fixes
+
+- **release**: publish workspace members instead of the virtual root manifest (#8) ([02d1879](https://github.com/urmzd/lazyspeak.nvim/commit/02d187953c15779b2a286ba89b35722a9999d448))
+
+[Full Changelog](https://github.com/urmzd/lazyspeak.nvim/compare/v0.6.0...v0.6.1)
+
+
 ## 0.6.0 (2026-07-25)
 
 ### Features
