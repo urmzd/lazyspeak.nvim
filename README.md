@@ -28,6 +28,19 @@ Mic -> Voxtral Mini 3B (local STT) -> transcript -> adapter -> agent -> Neovim
 
 No cloud STT dependency. No TTS. You speak, it codes.
 
+## Contents
+
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Agent Setup](#agent-setup)
+- [Quick Start](#quick-start)
+- [Resource requirements](#resource-requirements)
+- [Usage](#usage)
+- [Configuration](#configuration)
+- [Architecture](#architecture)
+- [Development](#development)
+- [License](#license)
+
 ## Prerequisites
 
 | Tool | Purpose | Install |
@@ -101,7 +114,7 @@ permission prompts all stream back into Neovim live. Pick an agent:
 
 The `claudecode` adapter launches Anthropic's official ACP bridge,
 [`@agentclientprotocol/claude-agent-acp`](https://www.npmjs.com/package/@agentclientprotocol/claude-agent-acp)
-(formerly `@zed-industries/claude-code-acp`), via `npx` — no global install required:
+(formerly `@zed-industries/claude-code-acp`), via `npx`, no global install required:
 
 ```lua
 require("lazyspeak").setup({
@@ -131,7 +144,7 @@ require("lazyspeak").setup({
 })
 ```
 
-## First run
+## Quick Start
 
 End to end, from a fresh install to your first voice-driven edit.
 
