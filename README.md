@@ -7,7 +7,7 @@
     &middot;
     <a href="https://github.com/urmzd/lazyspeak.nvim/issues">Report Bug</a>
     &middot;
-    <a href="#agent-setup">Agents</a>
+    <a href="docs/roadmap.md">Roadmap</a>
   </p>
 </p>
 
@@ -17,45 +17,69 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/urmzd/lazyspeak.nvim" alt="License"></a>
 </p>
 
-<p align="center">
-  <img src="showcase/lazyspeak-demo.gif" alt="lazyspeak.nvim demo" width="80%">
-</p>
-
-```
-Mic -> Voxtral Mini 3B (local STT) -> transcript -> adapter -> agent -> Neovim
-         ~3.2 GB GGUF, Apache 2.0      Agent Client Protocol (ACP)
-```
-
-No cloud STT dependency. No TTS. You speak, it codes.
-
 ## Contents
 
-- [Prerequisites](#prerequisites)
+- [Features](#features)
 - [Installation](#installation)
-- [Agent Setup](#agent-setup)
 - [Quick Start](#quick-start)
-- [Resource requirements](#resource-requirements)
 - [Usage](#usage)
 - [Configuration](#configuration)
-- [Architecture](#architecture)
 - [Development](#development)
+- [Documentation](#documentation)
 - [License](#license)
 
-## Prerequisites
+## Features
 
-| Tool | Purpose | Install |
-|------|---------|---------|
-| Neovim >= 0.10 | Editor | [neovim.io](https://neovim.io) |
-| Rust toolchain | Build daemon binary | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
-| llama.cpp | Local STT inference | `brew install llama.cpp` |
-| Node.js >= 18 | Run the Claude Code ACP bridge (`npx`) | [nodejs.org](https://nodejs.org) |
-| An [ACP](https://agentclientprotocol.com) agent (Claude Code, Gemini, Goose, …) | Coding intelligence | See [Agent Setup](#agent-setup) |
-
-Optional: [just](https://github.com/casey/just) for convenient dev commands.
+- **Local speech-to-text**: Voxtral Mini 3B runs on your machine through `llama-server`. No cloud STT, no TTS.
+- **Any ACP agent**: Claude Code by default, or Gemini CLI, Goose, and any other [Agent Client Protocol](https://agentclientprotocol.com) agent.
+- **Live sidebar**: transcripts, agent output, tool calls, and permission prompts stream into Neovim as they happen.
+- **Permission prompts**: every file change asks first unless you enable `auto_approve`.
+- **Undo by key or voice**: `<leader>lu` or saying "undo" reverts the last agent edit from a snapshot stack kept outside your repo.
+- **Voice commands**: "undo", "undo all", and "cancel" are handled locally without reaching the agent.
+- **Status line component**: `require("lazyspeak").status()` reports listening, transcribing, and agent state.
 
 ## Installation
 
-### With [lazy.nvim](https://github.com/folke/lazy.nvim) (recommended)
+### Prerequisites
+
+| Requirement | Version | Install |
+|-------------|---------|---------|
+| Neovim | >= 0.10 | [neovim.io](https://neovim.io) |
+| Rust toolchain | stable | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
+| llama.cpp | any | `brew install llama.cpp` |
+| Node.js | >= 18 | [nodejs.org](https://nodejs.org) (runs the Claude Code ACP bridge via `npx`) |
+| An [ACP](https://agentclientprotocol.com) agent | any | See [Agents](#agents) |
+
+Optional: [just](https://github.com/casey/just) for dev commands.
+
+### System requirements
+
+The local STT server is the main cost. Budget roughly:
+
+| | |
+|---|---|
+| Disk | ~3 GB for the GGUF plus audio encoder, downloaded once |
+| Memory, resident | ~4-5 GB once weights, KV cache, and Metal buffers are up |
+| Practical floor | 16 GB unified memory; Apple Silicon uses Metal automatically |
+
+The common failure is memory contention, not raw capacity. Another local model
+competes for the same memory: Ollama's server, for instance, is often launched
+with `--no-mmap`, which pins its weights. Two hot 3B models plus an editor on a
+16-24 GB machine push the system into swap, and model loading slows from seconds
+to minutes.
+
+If startup crawls, check memory pressure first:
+
+```sh
+sysctl vm.swapusage      # swap nearly full means you are already thrashing
+pgrep -fl llama-server   # something else may already hold a model resident
+```
+
+Stop the other model, or reboot to reclaim swap. A moving `downloading model NN%`
+in the sidebar header is healthy; a `loading model...` that sits for minutes is
+memory pressure.
+
+### lazy.nvim (recommended)
 
 ```lua
 {
@@ -67,25 +91,11 @@ Optional: [just](https://github.com/casey/just) for convenient dev commands.
 }
 ```
 
-`:LazySpeakInstall` will build and install the `lazyspeak` daemon binary via `cargo install`.
+`:LazySpeakInstall` builds and installs the `lazyspeak` daemon binary via `cargo install`.
 
-When you run `:LazySpeakStart`, the plugin automatically starts `llama-server` which downloads [ggml-org/Voxtral-Mini-3B-2507-GGUF](https://huggingface.co/ggml-org/Voxtral-Mini-3B-2507-GGUF) (Apache 2.0, ~3.2 GB) on first run. It shuts down with `:LazySpeakStop`.
+`:LazySpeakStart` starts `llama-server`, which downloads [ggml-org/Voxtral-Mini-3B-2507-GGUF](https://huggingface.co/ggml-org/Voxtral-Mini-3B-2507-GGUF) (Apache 2.0, ~3.2 GB) on first run. `:LazySpeakStop` shuts it down.
 
-#### External STT server (advanced)
-
-To use your own STT server instead of the auto-managed llama-server:
-
-```lua
-require("lazyspeak").setup({
-  model = {
-    server_url = "http://127.0.0.1:8674",
-  },
-})
-```
-
-The server must expose an OpenAI-compatible `/v1/audio/transcriptions` endpoint.
-
-### Manual installation
+### Manual
 
 ```sh
 # 1. Clone the plugin
@@ -96,57 +106,13 @@ cd ~/.local/share/nvim/lazy/lazyspeak.nvim
 cargo install --path crates/lazyspeak
 ```
 
-### Verify installation
-
-Open Neovim and run:
+### Verify
 
 ```vim
 :checkhealth lazyspeak
 ```
 
-## Agent Setup
-
-lazyspeak.nvim speaks the [Agent Client Protocol (ACP)](https://agentclientprotocol.com)
-to any compatible agent over stdio. Agent responses, tool calls, file edits, and
-permission prompts all stream back into Neovim live. Pick an agent:
-
-### Claude Code (default)
-
-The `claudecode` adapter launches Anthropic's official ACP bridge,
-[`@agentclientprotocol/claude-agent-acp`](https://www.npmjs.com/package/@agentclientprotocol/claude-agent-acp)
-(formerly `@zed-industries/claude-code-acp`), via `npx`, no global install required:
-
-```lua
-require("lazyspeak").setup({
-  agent = { adapter = "claudecode" },
-})
-```
-
-**Authentication:** the bridge inherits your environment, so either export
-`ANTHROPIC_API_KEY`, or run `claude login` once (its cached token is reused). No
-in-editor login flow is needed.
-
-> Claude has no native audio input, so lazyspeak always transcribes locally
-> (Voxtral) and sends **text** to the agent.
-
-### Other ACP agents
-
-Point the `acp` adapter at any ACP agent's launch command:
-
-```lua
-require("lazyspeak").setup({
-  agent = {
-    adapter = "acp",
-    cmd = { "gemini", "--acp" },  -- Gemini CLI (natively multimodal)
-    -- cmd = { "goose", "acp" },  -- Goose
-    -- cmd = { "claude-agent-acp" }, -- Claude bridge installed globally
-  },
-})
-```
-
 ## Quick Start
-
-End to end, from a fresh install to your first voice-driven edit.
 
 **1. Confirm the pieces are in place.**
 
@@ -246,47 +212,6 @@ something real.
 **8. Finish up.** `<Esc>` dismisses the UI but leaves the daemon warm, so the
 next `<leader>ls` is instant. `:LazySpeakStop` shuts everything down and frees
 the model's memory. Quitting Neovim tears it all down either way.
-
-### Tuning after a few turns
-
-| Symptom | Knob |
-|---------|------|
-| It cuts you off mid-sentence | raise `audio.silence_duration_ms` (default 400) |
-| It waits too long before sending | lower `audio.silence_duration_ms` |
-| It triggers on background noise | raise `audio.vad_threshold` (default 0.01) |
-| Permission prompts are tedious | `agent.auto_approve = true` |
-| The sidebar is in the way | `ui.sidebar_auto_open = false`, open it with `<leader>ll` |
-| The sidebar is too narrow or wide | `ui.sidebar_width` (default 48) |
-| You want it on the left | `ui.sidebar_position = "left"` |
-
-## Resource requirements
-
-Voxtral Mini 3B runs entirely on your machine, so the STT server is the main
-cost. Budget roughly:
-
-| | |
-|---|---|
-| Disk | ~3 GB for the GGUF plus audio encoder, downloaded once |
-| Memory, resident | ~4-5 GB once weights, KV cache, and Metal buffers are up |
-| Practical floor | 16 GB unified memory; Apple Silicon uses Metal automatically |
-
-The failure mode worth knowing about is memory contention rather than raw
-capacity. If you already run another local model, the two compete: Ollama's
-server, for instance, is often launched with `--no-mmap`, which pins its weights
-so they cannot be evicted through the page cache. Two hot 3B models plus an
-editor on a 16-24 GB machine will push the system into swap, and model loading
-slows from seconds to minutes.
-
-If startup crawls, check pressure before blaming the plugin:
-
-```sh
-sysctl vm.swapusage      # swap nearly full means you are already thrashing
-pgrep -fl llama-server   # something else may already hold a model resident
-```
-
-Stopping the other model, or a reboot to reclaim swap, is usually the fix. The
-sidebar header distinguishes the cases for you: a moving `downloading model NN%`
-is healthy, a `loading model...` that sits for minutes is memory pressure.
 
 ## Usage
 
@@ -392,14 +317,7 @@ Snapshots live **outside your repository**, under Neovim's state directory:
 $XDG_STATE_HOME/nvim/lazyspeak/snapshots/<session>/<snapshot>/
 ```
 
-Nothing is written to the repo itself until an undo actually restores files. An
-earlier version used `git stash create` plus `git stash store`, which put plugin
-bookkeeping into your own `git stash list` where it accumulated and mixed with
-your real stashes.
-
-State rather than config or data because this is regenerable session state, not
-settings you wrote, and it is where Neovim already keeps undo files, swap, and
-shada.
+Nothing is written to the repo itself until an undo restores files.
 
 Lifecycle:
 
@@ -433,7 +351,7 @@ These phrases are intercepted locally before reaching the agent:
 
 ### Status line
 
-Add to your status line (lualine, etc.):
+Add this to your status line (lualine, etc.):
 
 ```lua
 require("lazyspeak").status()
@@ -490,22 +408,82 @@ require("lazyspeak").setup({
 })
 ```
 
-## Architecture
+### Agents
 
-```
-Neovim (Lua plugin)
-  |
-  | stdin/stdout JSON lines
-  v
-lazyspeak daemon (Rust binary)
-  |  - mic capture (cpal)
-  |  - energy-based VAD
-  |  - STT via llama-server (HTTP)
-  v
-transcript -> adapter -> agent -> edits applied in Neovim
+lazyspeak.nvim talks to any [Agent Client Protocol (ACP)](https://agentclientprotocol.com)
+agent over stdio. Pick one:
+
+#### Claude Code (default)
+
+The `claudecode` adapter launches Anthropic's official ACP bridge,
+[`@agentclientprotocol/claude-agent-acp`](https://www.npmjs.com/package/@agentclientprotocol/claude-agent-acp)
+(formerly `@zed-industries/claude-code-acp`), via `npx`, no global install required:
+
+```lua
+require("lazyspeak").setup({
+  agent = { adapter = "claudecode" },
+})
 ```
 
-The daemon uses a `SpeechTranscriber` trait to abstract over STT backends. The plugin uses an Internal Representation (IR) to decouple from any specific agent protocol. Both layers are pluggable.
+**Authentication:** the bridge inherits your environment, so either export
+`ANTHROPIC_API_KEY`, or run `claude login` once (its cached token is reused). No
+in-editor login flow is needed.
+
+> Claude has no native audio input, so lazyspeak always transcribes locally
+> (Voxtral) and sends **text** to the agent.
+
+#### Other ACP agents
+
+Point the `acp` adapter at any ACP agent's launch command:
+
+```lua
+require("lazyspeak").setup({
+  agent = {
+    adapter = "acp",
+    cmd = { "gemini", "--acp" },  -- Gemini CLI (natively multimodal)
+    -- cmd = { "goose", "acp" },  -- Goose
+    -- cmd = { "claude-agent-acp" }, -- Claude bridge installed globally
+  },
+})
+```
+
+### External STT server
+
+To use your own STT server instead of the auto-managed `llama-server`:
+
+```lua
+require("lazyspeak").setup({
+  model = {
+    server_url = "http://127.0.0.1:8674",
+  },
+})
+```
+
+The server must expose an OpenAI-compatible `/v1/audio/transcriptions` endpoint.
+
+### Tuning
+
+| Symptom | Knob |
+|---------|------|
+| It cuts you off mid-sentence | raise `audio.silence_duration_ms` (default 400) |
+| It waits too long before sending | lower `audio.silence_duration_ms` |
+| It triggers on background noise | raise `audio.vad_threshold` (default 0.01) |
+| Permission prompts are tedious | `agent.auto_approve = true` |
+| The sidebar is in the way | `ui.sidebar_auto_open = false`, open it with `<leader>ll` |
+| The sidebar is too narrow or wide | `ui.sidebar_width` (default 48) |
+| You want it on the left | `ui.sidebar_position = "left"` |
+
+### Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LAZYSPEAK_STT_URL` | `http://127.0.0.1:8674` | llama-server URL |
+| `LAZYSPEAK_VAD_THRESHOLD` | `0.01` | RMS energy threshold for speech detection |
+| `LAZYSPEAK_SILENCE_MS` | `400` | Trailing silence before an utterance is finalized |
+| `LAZYSPEAK_MAX_MS` | `30000` | Max utterance length before forced finalization |
+| `LAZYSPEAK_PARTIAL_MS` | `700` | Interim transcript cadence while speaking (0 disables) |
+
+The plugin sets these from your `audio` config. Set them directly only when running the daemon standalone.
 
 ## Development
 
@@ -518,17 +496,11 @@ just daemon-dev     # Run daemon in dev mode
 just nvim-dev       # Launch Neovim with plugin loaded
 ```
 
-### Environment variables
+## Documentation
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `LAZYSPEAK_STT_URL` | `http://127.0.0.1:8674` | llama-server URL |
-| `LAZYSPEAK_VAD_THRESHOLD` | `0.01` | RMS energy threshold for speech detection |
-| `LAZYSPEAK_SILENCE_MS` | `400` | Trailing silence before an utterance is finalized |
-| `LAZYSPEAK_MAX_MS` | `30000` | Max utterance length before forced finalization |
-| `LAZYSPEAK_PARTIAL_MS` | `700` | Interim transcript cadence while speaking (0 disables) |
-
-These are set automatically from your `audio` config; override them directly only when running the daemon standalone.
+- [Specification](SPEC.md)
+- [Roadmap](docs/roadmap.md)
+- [Changelog](CHANGELOG.md)
 
 ## License
 
