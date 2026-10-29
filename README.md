@@ -7,7 +7,7 @@
     &middot;
     <a href="https://github.com/urmzd/lazyspeak.nvim/issues">Report Bug</a>
     &middot;
-    <a href="docs/roadmap.md">Roadmap</a>
+    <a href="docs/plans/roadmap.md">Roadmap</a>
   </p>
 </p>
 
@@ -304,7 +304,7 @@ in core.lua" works. "Fix this function" or "the line I'm on" does not, because
 there is no *this*.
 
 Automatic context injection (current file, cursor line, selection) is not yet
-implemented. It is tracked in [docs/roadmap.md](docs/roadmap.md).
+implemented. It is tracked in [docs/plans/roadmap.md](docs/plans/roadmap.md).
 
 ### Undo and snapshots
 
@@ -498,8 +498,8 @@ just nvim-dev       # Launch Neovim with plugin loaded
 
 ## Documentation
 
-- [Specification](SPEC.md)
-- [Roadmap](docs/roadmap.md)
+- [Specification](docs/reference/spec.md)
+- [Roadmap](docs/plans/roadmap.md)
 - [Changelog](CHANGELOG.md)
 
 ## License

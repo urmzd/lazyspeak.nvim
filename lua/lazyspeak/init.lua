@@ -60,7 +60,7 @@ M.defaults = {
 		cancel = "<leader>lc",
 		undo = "<leader>lu",
 		sidebar = "<leader>ll",
-		-- Reserved, not yet bound: see docs/roadmap.md.
+		-- Reserved, not yet bound: see docs/plans/roadmap.md.
 		toggle_listen = "<leader>lS",
 		history = "<leader>lh",
 		switch_agent = "<leader>la",
