@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.2 (2026-11-21)
+
+### Bug Fixes
+
+- **deps**: patch vulnerable dependencies (#13) ([caa9587](https://github.com/urmzd/lazyspeak.nvim/commit/caa9587dc5552271762cd433b4f27c0ad378adeb))
+
+### Misc
+
+- move docs into the scaffold-docs layout (#14) ([46e659c](https://github.com/urmzd/lazyspeak.nvim/commit/46e659c736f5e3d6f6843b88c9db83ce703e38c5))
+- move docs into the scaffold-docs layout (#12) ([b248a07](https://github.com/urmzd/lazyspeak.nvim/commit/b248a0764b505ca261f0d79d3a9f035e285f4e0e))
+- align README with standalone structure ([ccb5d48](https://github.com/urmzd/lazyspeak.nvim/commit/ccb5d48cbb24507c31fe6d3622ed25d675792bd9))
+- **readme**: align with fleet standard (#11) ([dbba616](https://github.com/urmzd/lazyspeak.nvim/commit/dbba6164b2a16092a4ac863d7753a03bcd01bb77))
+- **release**: read the sr-releaser key from the release environment (#10) ([4f2a146](https://github.com/urmzd/lazyspeak.nvim/commit/4f2a1461048a0e5c532b2a8909fbd27b2d33847b))
+- upgrade urmzd/sr action to v9 (#9) ([b7d620b](https://github.com/urmzd/lazyspeak.nvim/commit/b7d620b6224970751f1970eaaefef6ddc454b0cc))
+
+[Full Changelog](https://github.com/urmzd/lazyspeak.nvim/compare/v0.6.1...v0.6.2)
+
+
 ## 0.6.1 (2026-08-14)
 
 ### Bug Fixes
